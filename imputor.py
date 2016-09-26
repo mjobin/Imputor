@@ -28,9 +28,11 @@ class InData(object):
     def __init__(self):
         self.ref_seq = None #Reference sequence used to construct sequence data from VCF
         self.sequence = [] #Sequence data
-        self.variants = set() #Set of locations and states of all variants from reference sequence
-        self.tree = None #Phylogenetic tree to be loaded or constructed from data
+        self.variantset = set() #Set of locations and states of all variants from reference sequence
+        self.variants = {} #Dictionary of each sample and its variation from the reference sequence
+        self.tree = None #Phylogenetic tree to be loaded or constructed from data. Newick format.
         self.filebase = None
+        self.treeparents = {}
         
         
         #The eight mandatory columns of a VCF file
@@ -52,13 +54,15 @@ class InData(object):
             Keyword arguments:
             reffile -- reference sequence file
             """
-        
+
         if reffile[-3:]=='obj':
             refobj = open(reffile,'rb')
             self.ref_seq = pickle.load(refobj)
         elif reffile[-3:]=='txt':
             ref_data = open(reffile,'r')
             self.ref_seq = ref_data.read()
+        else:
+            print "Error. Not a known reference sequence type."
         return
 
     def load_input_data(self, inputfile = None):
@@ -91,10 +95,11 @@ class InData(object):
             #Generate variants
             for snp_line in snps_data:
                 cols = snp_line.split('\t')
-                self.variants.add(cols[self.vcf_pos]+cols[self.vcf_alt])
+                self.variantset.add(cols[self.vcf_pos]+cols[self.vcf_alt])
         
             #Generate sequence from only those areas with any polymorphism
             self.seq_from_variants(raw_data)
+
 
         return
 
@@ -146,12 +151,16 @@ class InData(object):
 
         """
         for seq_line in self.sequence:
+            print seq_line
             if len(seq_line) > len(self.ref_seq):
                 print "Error! A sequence line is longer than the reference sequence!"
             diffs = [i for i in xrange(len(self.ref_seq)) if self.ref_seq[i] != seq_line[i]] #All indexes where the sequence does not match
             print diffs
+            curdiffs = []
             for diff_pos in diffs:
-                self.variants.add(str(diff_pos)+seq_line[diff_pos]) #Each addition to variants will thus be unique, since using a set
+                self.variantset.add(str(diff_pos)+seq_line[diff_pos]) #Each addition to variantset will thus be unique, since using a set
+                curdiffs.append(str(diff_pos) + seq_line[diff_pos])
+            self.variants[seq_line.name] = curdiffs
         return
 
 
@@ -176,8 +185,9 @@ class InData(object):
                 else:
                     print "Error. VCF file with no genotype. Cannot create sequence data."
                     return
+        #Step through data lines, constructing list of variants
 
-        #Step through data lines, reconstrucing the state of each individual
+        #Step through data lines, reconstrucing the sequence of each individual
         snps_data = self.vcf_snp_prune(raw_data) #Ensure only SNPs are being processed
         for file_line in snps_data:
             cols = file_line.split('\t')
@@ -205,6 +215,15 @@ class InData(object):
                         genotype_sequence[changed_genotype_names[allele_pos]].append(cols[self.vcf_ref])
                     else:
                         genotype_sequence[changed_genotype_names[allele_pos]].append(alt_alleles[int(assigned_allele)-1])
+                        if changed_genotype_names[allele_pos] in self.variants: #Keys added to self.variants here
+                            self.variants[changed_genotype_names[allele_pos]].append( #to avoid empty entries
+                                cols[self.vcf_pos]+alt_alleles[int(assigned_allele) - 1])
+                        else:
+                            self.variants[changed_genotype_names[allele_pos]] = []
+                            self.variants[changed_genotype_names[allele_pos]].append(
+                                cols[self.vcf_pos]+alt_alleles[int(assigned_allele) - 1])
+
+
                         
 
 
@@ -227,6 +246,12 @@ class InData(object):
         self.sequence = AlignIO.read('vcf_seq_temp.fasta', 'fasta')
 
 
+    def all_parents(self, tree):
+        parents = {}
+        for clade in tree.find_clades(order='level'):
+            for child in clade:
+                parents[child] = clade
+        return parents
 
     def input_tree(self, treetype = None, alpha = None, bootstrap = None, rmodel = None):
         """ Generates sequence data from the variants drived from a VCF file.
@@ -247,6 +272,10 @@ class InData(object):
             self.raxml_tree(rmodel)
         else:
             self.phyml_tree(alpha, bootstrap)
+
+        self.treeparents = self.all_parents(self.tree)
+
+
 
 
 
@@ -281,7 +310,6 @@ class InData(object):
         AlignIO.write(self.sequence, tempfastafile, "fasta")
         rng = random.SystemRandom() #Uses /dev/urandom
         raxml_cline = RaxmlCommandline(sequences=tempfastafile, model=rmodel, name="imputor",  parsimony_seed = rng.randint(0, sys.maxint))
-        print "Command line for RAxML: " + raxml_cline
         out_log, err_log = raxml_cline()
         print err_log
         print out_log
@@ -290,11 +318,10 @@ class InData(object):
         self.tree  = Phylo.read("RAxML_bestTree.imputor", "newick")
         
         
-        #Erase RaXML files??? FIXME
-        #raxml_intermediates = self.filebase + time.strftime("%d/%m/%Y%I:%M:%S")
-        #bfile = open(bz2.BZ2File(raxml_intermediates,'w'))
-        #for raxmlfile in raxml_glob:
-        #   bfile.write(raxmlfile)
+        #Erase RaXML intermediate files
+        for delfile in raxml_glob:
+            print delfile
+            os.remove(delfile)
         
 
 
@@ -316,6 +343,122 @@ class InData(object):
         phytreefile = tempphyfile + "_phyml_tree.txt"
         self.tree  = Phylo.read(phytreefile, "newick")
 
+    def assign_to_haplogroups(self):
+        """ Assigns samples to haplogroups.
+
+        """
+        print "assign"
+
+
+
+    def impute_missing(self):
+        """ Imputes missing mutations.
+
+        """
+        #get parents
+        parents = self.all_parents(self.tree) #These are stored as a dictionary of clades
+        print type(parents)
+        print parents.keys()
+        #Step through all clades
+
+        # for clade1 in self.tree.find_clades(order='level'):
+        #     if clade1.name: #If a named clade and thus one that should have a sequence
+        #         print "Clade: " + str(clade1) + " " + str(type(clade1))
+        #         print "****"
+        #         print "Parent: " + str(parents[clade1])
+        #         #find that name in sequences ...  SLOW and stupid for now
+        #         for chkseq in self.sequence:
+        #             if chkseq.name == str(clade1):
+        #                 print chkseq.name + " " + chkseq.seq
+        #         for clade2 in self.tree.find_clades():
+        #             if (str(clade2) == str(clade1)):
+        #                 continue
+        #             if clade2.name: #If a named clade and thus one that should have a sequence
+        #                 cladistance = self.tree.distance(clade1, clade2)
+        #                 print str(clade2) + " " + str(cladistance)
+        #                 if parents[clade1] == parents[clade2]: #if the two clades share a parent
+        #                     print "same parent"
+        #         #now sort by distance
+        #     print "\n\n"
+        #
+        # preterms = []
+        # #Find all preterminal clades
+        # for clade in self.tree.find_clades(order='level'):
+        #     if clade.is_preterminal():
+        #         preterms.append(clade)
+        # print "\n\npretrms"
+        # for clade in preterms:
+        #     print "Preterm:" + str(clade)
+        #     for child in clade:
+        #         print child
+        #
+        # print "\n\nNON"
+        # nonterms = self.tree.get_nonterminals() #Get all internal nodes on tree
+        # for nonterm in nonterms:
+        #     print nonterm
+        #     print "***"
+        #     for child in nonterm: #
+        #         print str(child) + str(child.is_terminal())
+        #     print "\n"
+
+        x = 3 #TEST
+        for clade1 in self.tree.find_clades(order='level'):
+            print "Starting at:" + str(clade1) + " for depth " + str(x)
+            empty = []
+            print "****"
+            kids = self.collect_kids(clade1, empty, 0, x)
+            #Build a set of all the variants possessed by any of these samples
+            curvariantset = set()
+            for child in kids:
+                if str(child) in self.variants:
+                    for curvariant in self.variants[str(child)]:
+                        curvariantset.add(curvariant)
+            for child in kids: #Check if a sample does not have a variant others do
+                for chkvariant in curvariantset:
+                    if str(child) in self.variants:
+                        if chkvariant in self.variants[str(child)]:
+                            print ""
+                        else:
+                            total = 0
+                            alts = 0
+                            for other in kids:
+                                if child != other:
+                                    if str(other) in self.variants:
+                                        if chkvariant in self.variants[str(other)]:
+                                            alts = alts +1
+                                    total = total + 1
+                            print str(alts) + " have the variant "+ str(chkvariant) + " out of a total of " + str(total) + " in this group"
+
+
+            print "\n"
+            #With this list of neighbors, compare sequence
+
+
+
+    def collect_kids(self, clade, kids, depth, maxdepth): #Recursive function for collecting all children to specified depth
+        if depth < maxdepth:
+            for child in clade:
+                if child.name:
+                    kids.append(child)
+                self.collect_kids(child, kids, depth+1, maxdepth)
+        return kids
+
+
+
+    def all_parents(self, tree):
+        parents = {}
+        for clade in self.tree.find_clades(order='level'):
+            for child in clade:
+                parents[child] = clade
+        return parents
+
+
+
+
+
+
+
+
 
 
 
@@ -328,12 +471,12 @@ if __name__ == "__main__":
     print "\n\n***IMPUTOR ***\n\n"
     
     parser = argparse.ArgumentParser(description="This script does: \n\n\t"\
-                                     "- not much right now.\n\t"\
-                                     "- nope",formatter_class=RawTextHelpFormatter)
+                                     "- .\n\t"\
+                                     "- ",formatter_class=RawTextHelpFormatter)
         
     parser.add_argument('-file',metavar='<file>',help='input file: .fasta, .vcf or .var', required=True)
     parser.add_argument('-ref',metavar='<ref>',help='reference sequence, .txt or .obj', required=True)
-    parser.add_argument('-tree',metavar='<tree>',help='tree type; <treefilename.xml>, pars, RAxML, PhyML', default='PhyML')
+    parser.add_argument('-tree',metavar='<tree>',help='tree type; <treefilename.xml>, pars, RAxML, PhyML', default='pars')
     parser.add_argument('-alpha',metavar='<alpha>',help='Value of gamma shape parameter.', default='e')
     parser.add_argument('-boot',metavar='<boot>',help='Number of bootstrap replicates for PhyML.', default='100')
     parser.add_argument('-rmodel',metavar='<rmodel>',help='Model type for RaXML.', default='GTRCAT')
@@ -347,8 +490,6 @@ if __name__ == "__main__":
     bootstrap = args.boot
     rmodel = args.rmodel
     
-    
-    os.chdir('/Users/matt/Research/Code/Imputor') #FIXME yank once running from terminal
 
     print "working in" + os.getcwd() + " on " + inputfile + " and " + reffile + " using " + treetype
     
@@ -358,12 +499,27 @@ if __name__ == "__main__":
     indata.load_ref_seq(reffile = reffile)
     indata.load_input_data(inputfile = inputfile)
     print "\n****************\nVARIANTS\n****************\n\n"
-    print indata.variants
-    print "\n****************\nSEQUENCE\n****************\n\n"
-    print indata.sequence
+    #print "all variants"
+    #print indata.variantset
+    #print "each sample variant"
+    #for i in indata.variants.keys():
+    #    print i
+     #   print indata.variants[i]
+    #print "\n****************\nSEQUENCE\n****************\n\n"
+    #print indata.sequence
     indata.input_tree(treetype = treetype, alpha = alpha, bootstrap = bootstrap, rmodel = rmodel)
-    print "\n****************\nTREE\n****************\n\n"
-    print indata.tree
+    #print "\n****************\nTREE\n****************\n\n"
+    #print indata.tree
+    Phylo.draw_ascii(indata.tree)
+
+
+
+    #print "\n****************\nHAPLOGROUPS\n****************\n\n"
+    #indata.assign_to_haplogroups()
+
+    print "\n****************\nIMPUTATION\n****************\n\n"
+    indata.impute_missing()
+
 
 
 
