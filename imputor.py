@@ -30,9 +30,7 @@ class InData(object):
         self.sequence = [] #Sequence data
         self.variantset = set() #Set of locations and states of all variants from reference sequence
         self.variants = {} #Dictionary of each sample and its variation from the reference sequence
-        self.tree = None #Phylogenetic tree to be loaded or constructed from data. Newick format.
         self.filebase = None
-        self.treeparents = {}
         
         
         #The eight mandatory columns of a VCF file
@@ -143,7 +141,6 @@ class InData(object):
                 continue
             snps_data.append(file_line)
         return snps_data
-    
 
     def variants_from_sequence(self):
         """ Returns a list of variants from a reference sequence.
@@ -162,7 +159,6 @@ class InData(object):
                 curdiffs.append(str(diff_pos) + seq_line[diff_pos])
             self.variants[seq_line.name] = curdiffs
         return
-
 
     def seq_from_variants(self, raw_data = None):
         """ Generates sequence data from the variants drived from a VCF file.
@@ -246,6 +242,36 @@ class InData(object):
         self.sequence = AlignIO.read('vcf_seq_temp.fasta', 'fasta')
 
 
+class PhyloTree(object):
+    """A phylogenetic tree either input from phyloxml format or constructed from sequence
+    """
+
+    def __init__(self):
+        self.tree = None  # Phylogenetic tree to be loaded or constructed from data. Newick format.
+        self.treeparents = {}
+
+    def input_tree(self, treetype=None, alpha=None, bootstrap=None, rmodel=None, indata=None):
+        """ Takes input tree file or sequence data.
+
+            Keyword arguments:
+            treetype -- type of tree to be input or constructed
+        """
+
+        self.treetype = treetype
+        self.tree = None
+
+
+        if self.treetype[-3:] == 'xml':
+            self.tree = Phylo.read(treetype, "phyloxml")
+        elif self.treetype == 'parsimony':
+            self.parsimony_tree()
+        elif self.treetype == 'RAxML':
+            self.raxml_tree(rmodel)
+        else:
+            self.phyml_tree(alpha, bootstrap)
+
+        self.treeparents = self.all_parents(self.tree)
+
     def all_parents(self, tree):
         parents = {}
         for clade in tree.find_clades(order='level'):
@@ -253,103 +279,87 @@ class InData(object):
                 parents[child] = clade
         return parents
 
-    def input_tree(self, treetype = None, alpha = None, bootstrap = None, rmodel = None):
-        """ Generates sequence data from the variants drived from a VCF file.
-            Sequence generated includes only polymorphic sites for the sake of brevity.
-            
-            Keyword arguments:
-            treetype -- type of tree to be input or constructed
-        """
-        
-        self.treetype = treetype
-        self.tree = None
-        
-        if self.treetype[-3:]=='xml':
-            self.tree = Phylo.read(treetype, "phyloxml")
-        elif self.treetype=='parsimony':
-            self.parsimony_tree()
-        elif self.treetype=='RAxML':
-            self.raxml_tree(rmodel)
-        else:
-            self.phyml_tree(alpha, bootstrap)
-
-        self.treeparents = self.all_parents(self.tree)
-
-
-
-
+    def collect_kids(self, clade, kids, depth, maxdepth): #Recursive function for collecting all children to specified depth
+        if depth < maxdepth:
+            for child in clade:
+                if child.name:
+                    kids.append(child)
+                self.collect_kids(child, kids, depth+1, maxdepth)
+        return kids
 
     def parsimony_tree(self):
         """ Constructs a tree via maximum parsimony using Biopython's ParsimonyTreeConstructor.
-            
+
         """
         scorer = ParsimonyScorer()
         searcher = NNITreeSearcher(scorer)
         constructor = ParsimonyTreeConstructor(searcher)
-        self.tree = constructor.build_tree(self.sequence)
+        self.tree = constructor.build_tree(indata.sequence)
 
-
-
-    def raxml_tree(self, rmodel = None):
+    def raxml_tree(self, rmodel=None):
         """ Constructs a tree via maximum likelihood by invoking external software RAxML.
             See docs for RAxML installation and setup.
-        
+
         """
-        
-        #Erase RaXML files??? FIXME
-        print "Erasing old RAxML output to allow RAxML to run."
+
+        # Erase RaXML files??? FIXME
+        #print "Erasing old RAxML output to allow RAxML to run."
         raxml_glob = glob.glob('RAxML_*')
         for delfile in raxml_glob:
-            print delfile
             os.remove(delfile)
 
-        
-        
-        #Output sequence to a temp FASTA file
-        tempfastafile = self.filebase + "_fastatmp.fasta"
-        AlignIO.write(self.sequence, tempfastafile, "fasta")
-        rng = random.SystemRandom() #Uses /dev/urandom
-        raxml_cline = RaxmlCommandline(sequences=tempfastafile, model=rmodel, name="imputor",  parsimony_seed = rng.randint(0, sys.maxint))
+        # Output sequence to a temp FASTA file
+        tempfastafile = indata.filebase + "_fastatmp.fasta"
+        AlignIO.write(indata.sequence, tempfastafile, "fasta")
+        rng = random.SystemRandom()  # Uses /dev/urandom
+        raxml_cline = RaxmlCommandline(sequences=tempfastafile, model=rmodel, name="imputor",
+                                       parsimony_seed=rng.randint(0, sys.maxint))
         out_log, err_log = raxml_cline()
-        print err_log
-        print out_log
-    
-        #Import best tree (newick format)
-        self.tree  = Phylo.read("RAxML_bestTree.imputor", "newick")
-        
-        
-        #Erase RaXML intermediate files
+        #print err_log
+        #print out_log
+
+        # Import best tree (newick format)
+        self.tree = Phylo.read("RAxML_bestTree.imputor", "newick")
+
+        # Erase RaXML intermediate files
         for delfile in raxml_glob:
-            print delfile
             os.remove(delfile)
-        
 
-
-    def phyml_tree(self, alpha = None, boostrap = None):
+    def phyml_tree(self, alpha=None, boostrap=None):
         """ Constructs a tree via maximum likelihood by invoking external software PhyML.
             See docs for PhyML installation and setup.
-            
+
         """
-        #Output sequence to a temp FASTA file
-        tempfastafile = self.filebase + "_fastatmp.fasta"
-        AlignIO.write(self.sequence, tempfastafile, "fasta")
-        tempphyfile = self.filebase + "_phytmp.phy"
+        # Output sequence to a temp FASTA file
+        tempfastafile = indata.filebase + "_fastatmp.fasta"
+        AlignIO.write(indata.sequence, tempfastafile, "fasta")
+        tempphyfile = indata.filebase + "_phytmp.phy"
         AlignIO.convert(tempfastafile, "fasta", tempphyfile, "phylip-relaxed")
         cmdline = PhymlCommandline(input=tempphyfile, alpha='e', bootstrap=100)
         print "Commandline for PhyML: " + str(cmdline)
         out_log, err_log = cmdline()
-        print err_log
-        print out_log
+        #print err_log
+        #print out_log
         phytreefile = tempphyfile + "_phyml_tree.txt"
-        self.tree  = Phylo.read(phytreefile, "newick")
+        self.tree = Phylo.read(phytreefile, "newick")
+
+
+class Imputation(object):
+    """Imputation of missing mutations given input data and a phylogenetic tree
+    """
+
+    def __init__(self, indata, tree):
+        print "imputation init"
+
+        #print indata
+        #print phytree
+
 
     def assign_to_haplogroups(self):
         """ Assigns samples to haplogroups.
 
         """
         print "assign"
-
-
 
     def impute_missing(self):
         """ Imputes missing mutations.
@@ -434,23 +444,20 @@ class InData(object):
             #With this list of neighbors, compare sequence
 
 
+class ReferenceData(object):
 
-    def collect_kids(self, clade, kids, depth, maxdepth): #Recursive function for collecting all children to specified depth
-        if depth < maxdepth:
-            for child in clade:
-                if child.name:
-                    kids.append(child)
-                self.collect_kids(child, kids, depth+1, maxdepth)
-        return kids
+    def __init__(self, haplogroupfile):
+        self.haplogroups = {}  # Trusted haplogroups
 
+        if haplogroupfile[-3:] == 'obj': #object file
+            haplogroupobj = open(haplogroupfile, 'rb')
+            self.haplogroups = pickle.load(haplogroupobj)
+        elif haplogroupfile[-3:] == 'txt': #text file
+            file_data = open(haplogroupfile, 'r')
+            raw_data = []
+            for file_line in file_data:
+                raw_data.append(file_line.rstrip())
 
-
-    def all_parents(self, tree):
-        parents = {}
-        for clade in self.tree.find_clades(order='level'):
-            for child in clade:
-                parents[child] = clade
-        return parents
 
 
 
@@ -491,7 +498,7 @@ if __name__ == "__main__":
     rmodel = args.rmodel
     
 
-    print "working in" + os.getcwd() + " on " + inputfile + " and " + reffile + " using " + treetype
+    #print "working in" + os.getcwd() + " on " + inputfile + " and " + reffile + " using " + treetype
     
 
 
@@ -499,26 +506,27 @@ if __name__ == "__main__":
     indata.load_ref_seq(reffile = reffile)
     indata.load_input_data(inputfile = inputfile)
     print "\n****************\nVARIANTS\n****************\n\n"
-    #print "all variants"
-    #print indata.variantset
-    #print "each sample variant"
-    #for i in indata.variants.keys():
-    #    print i
-     #   print indata.variants[i]
-    #print "\n****************\nSEQUENCE\n****************\n\n"
-    #print indata.sequence
-    indata.input_tree(treetype = treetype, alpha = alpha, bootstrap = bootstrap, rmodel = rmodel)
-    #print "\n****************\nTREE\n****************\n\n"
-    #print indata.tree
-    Phylo.draw_ascii(indata.tree)
+    print "All variants"
+    print indata.variantset
+    print "each sample variant"
+    for i in indata.variants.keys():
+        print i
+        print indata.variants[i]
+    print "\n****************\nSEQUENCE\n****************\n\n"
+    print indata.sequence
 
+    print "\n****************\nTREE\n****************\n\n"
+    phytree = PhyloTree()
+    phytree.input_tree(treetype = treetype, alpha = alpha, bootstrap = bootstrap, rmodel = rmodel)
+    Phylo.draw_ascii(phytree.tree)
 
 
     #print "\n****************\nHAPLOGROUPS\n****************\n\n"
     #indata.assign_to_haplogroups()
 
     print "\n****************\nIMPUTATION\n****************\n\n"
-    indata.impute_missing()
+    impute = Imputation(indata, phytree)
+    #indata.impute_missing()
 
 
 
