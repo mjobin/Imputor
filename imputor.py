@@ -15,6 +15,8 @@ import time
 import argparse
 from argparse import RawTextHelpFormatter
 import pickle
+import multiprocessing
+from multiprocessing import Process
 from Bio import AlignIO
 from Bio import Phylo
 from Bio.Phylo.Applications import PhymlCommandline
@@ -287,6 +289,13 @@ class PhyloTree(object):
                 self.collect_kids(child, kids, depth+1, maxdepth)
         return kids
 
+    def collect_all_kids(self, clade, kids): #Recursive function for collecting all children to specified depth
+        for child in clade:
+            if child.name:
+                kids.append(child)
+            self.collect_all_kids(child, kids)
+        return kids
+
     def parsimony_tree(self):
         """ Constructs a tree via maximum parsimony using Biopython's ParsimonyTreeConstructor.
 
@@ -349,99 +358,67 @@ class Imputation(object):
     """
 
     def __init__(self, indata, tree):
-        print "imputation init"
+        self.cpucount = multiprocessing.cpu_count()
 
-        #print indata
-        #print phytree
+    def impute(self, depth):
+        """ Sets up multiprocessing of imputation function for all terminal nodes.
 
-
-    def assign_to_haplogroups(self):
-        """ Assigns samples to haplogroups.
+            Keyword arguments:
+            depth -- Depth of search up and down tree to find neighbours.
 
         """
-        print "assign"
+        impute_threads = []
+        terms = phytree.tree.get_terminals()  # Get all internal nodes on tree. These are the ones with samples.
+        for term in terms:
+            impute_threads.append(Process(target=self.impute_missing, args=(term, depth,)).start())
 
-    def impute_missing(self):
+        #for thread in impute_threads: #Block until all complete?
+            #thread.join()
+
+
+    def impute_missing(self, term, depth):
         """ Imputes missing mutations.
 
+            Keyword arguments:
+            term -- Terminal node to be compared to neighbours.
+            depth -- Depth of search up and down tree to find neighbours.
+
         """
-        #get parents
-        parents = self.all_parents(self.tree) #These are stored as a dictionary of clades
-        print type(parents)
-        print parents.keys()
-        #Step through all clades
 
-        # for clade1 in self.tree.find_clades(order='level'):
-        #     if clade1.name: #If a named clade and thus one that should have a sequence
-        #         print "Clade: " + str(clade1) + " " + str(type(clade1))
-        #         print "****"
-        #         print "Parent: " + str(parents[clade1])
-        #         #find that name in sequences ...  SLOW and stupid for now
-        #         for chkseq in self.sequence:
-        #             if chkseq.name == str(clade1):
-        #                 print chkseq.name + " " + chkseq.seq
-        #         for clade2 in self.tree.find_clades():
-        #             if (str(clade2) == str(clade1)):
-        #                 continue
-        #             if clade2.name: #If a named clade and thus one that should have a sequence
-        #                 cladistance = self.tree.distance(clade1, clade2)
-        #                 print str(clade2) + " " + str(cladistance)
-        #                 if parents[clade1] == parents[clade2]: #if the two clades share a parent
-        #                     print "same parent"
-        #         #now sort by distance
-        #     print "\n\n"
-        #
-        # preterms = []
-        # #Find all preterminal clades
-        # for clade in self.tree.find_clades(order='level'):
-        #     if clade.is_preterminal():
-        #         preterms.append(clade)
-        # print "\n\npretrms"
-        # for clade in preterms:
-        #     print "Preterm:" + str(clade)
-        #     for child in clade:
-        #         print child
-        #
-        # print "\n\nNON"
-        # nonterms = self.tree.get_nonterminals() #Get all internal nodes on tree
-        # for nonterm in nonterms:
-        #     print nonterm
-        #     print "***"
-        #     for child in nonterm: #
-        #         print str(child) + str(child.is_terminal())
-        #     print "\n"
 
-        x = 3 #TEST
-        for clade1 in self.tree.find_clades(order='level'):
-            print "Starting at:" + str(clade1) + " for depth " + str(x)
+        termvars = indata.variants[str(term)]  # extract all the variants
+        theparent = None
+        curnode = term
+        for x in range(0, depth): #Descend tree to user-specified depth
+            if curnode in phytree.treeparents: #Will not go past the root clade
+                partemp = theparent
+                theparent = phytree.treeparents[curnode] #Should be an internal clade with no associated sample
+                curnode = partemp
+        if theparent: #If we have found a valid parent clade at specififed depth
             empty = []
-            print "****"
-            kids = self.collect_kids(clade1, empty, 0, x)
-            #Build a set of all the variants possessed by any of these samples
-            curvariantset = set()
-            for child in kids:
-                if str(child) in self.variants:
-                    for curvariant in self.variants[str(child)]:
-                        curvariantset.add(curvariant)
-            for child in kids: #Check if a sample does not have a variant others do
-                for chkvariant in curvariantset:
-                    if str(child) in self.variants:
-                        if chkvariant in self.variants[str(child)]:
-                            print ""
-                        else:
-                            total = 0
-                            alts = 0
-                            for other in kids:
-                                if child != other:
-                                    if str(other) in self.variants:
-                                        if chkvariant in self.variants[str(other)]:
-                                            alts = alts +1
-                                    total = total + 1
-                            print str(alts) + " have the variant "+ str(chkvariant) + " out of a total of " + str(total) + " in this group"
+            allkids = phytree.collect_kids(theparent, empty, 0, depth)
+            neighbour_variantset = set() #Set of all variants for this particular group of neighbours
+            for kid in allkids:
+                thesevars = indata.variants[str(kid)] #extract all the variants
+                for thisvar in thesevars:
+                    neighbour_variantset.add(thisvar)
 
+            for curvar in neighbour_variantset:
+                present = 0
+                curpresent = False
+                for kid in allkids:
+                    thesevars = indata.variants[str(kid)]  # extract all the variants
+                    if curvar in thesevars:
+                        present = present + 1
+                        if term == kid:
+                            curpresent = True
+                if curpresent:
+                    print str(term) + " has variant: " + curvar + ". Freq in group: " + str(float(present)/float(len(allkids)))
+                else:
+                    print str(term) + " LACKS variant: " + curvar + ". Freq in group: " + str(float(present)/float(len(allkids)))
 
-            print "\n"
-            #With this list of neighbors, compare sequence
+        print "\n"
+
 
 
 class ReferenceData(object):
@@ -474,6 +451,7 @@ class ReferenceData(object):
 
 
 
+
 if __name__ == "__main__":
     print "\n\n***IMPUTOR ***\n\n"
     
@@ -487,7 +465,8 @@ if __name__ == "__main__":
     parser.add_argument('-alpha',metavar='<alpha>',help='Value of gamma shape parameter.', default='e')
     parser.add_argument('-boot',metavar='<boot>',help='Number of bootstrap replicates for PhyML.', default='100')
     parser.add_argument('-rmodel',metavar='<rmodel>',help='Model type for RaXML.', default='GTRCAT')
-    
+    parser.add_argument('-depth', metavar='<depth>', help='Depth of search toward root for collecting neeighbors.', default=1)
+    parser.add_argument('-hapobj', metavar='<hapobj>', help='Haplogroup object.')
 
     args = parser.parse_args()
     inputfile = args.file
@@ -496,10 +475,13 @@ if __name__ == "__main__":
     alpha = args.alpha
     bootstrap = args.boot
     rmodel = args.rmodel
+    hapobj = args.hapobj
+    depth = int(args.depth)
     
 
-    #print "working in" + os.getcwd() + " on " + inputfile + " and " + reffile + " using " + treetype
-    
+    print "Working in" + os.getcwd() + " on " + inputfile + " and " + reffile + " using " + treetype
+
+
 
 
     indata = InData()
@@ -518,6 +500,7 @@ if __name__ == "__main__":
     print "\n****************\nTREE\n****************\n\n"
     phytree = PhyloTree()
     phytree.input_tree(treetype = treetype, alpha = alpha, bootstrap = bootstrap, rmodel = rmodel)
+    print phytree.tree
     Phylo.draw_ascii(phytree.tree)
 
 
@@ -526,8 +509,12 @@ if __name__ == "__main__":
 
     print "\n****************\nIMPUTATION\n****************\n\n"
     impute = Imputation(indata, phytree)
-    #indata.impute_missing()
+    impute.impute(depth)
 
+
+    #print "\n****************\nREFERENCE DATA\n****************\n\n"
+    #refdata = ReferenceData(hapobj)
+    #print refdata.haplogroups
 
 
 
