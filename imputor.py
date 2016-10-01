@@ -1,8 +1,9 @@
 #Imputor
 
-""" Imputor
+""" Imputor - software for imputing missing mutations in sequencing data by the use
+    of phylogenetic trees.
     
-    
+    Author - Matthew Jobin
     """
 
 
@@ -24,7 +25,9 @@ from Bio.Phylo.Applications import RaxmlCommandline
 
 
 class InData(object):
-    """Input data from Fasta or VCF file converted internally to sequence data.
+    """Input data from FASTA or VCF file converted internally to sequence data.
+        Prepares a dictionary of variants and a list of sequences for processing
+        and imputation.
     """
     
     def __init__(self):
@@ -35,7 +38,7 @@ class InData(object):
         self.filebase = None
         
         
-        #The eight mandatory columns of a VCF file
+        #The eight mandatory columns of a VCF file. Here for clarity in functions below.
         self.vcf_chrom = 0
         self.vcf_pos = 1
         self.vcf_id = 2
@@ -125,7 +128,7 @@ class InData(object):
         return expanded_file_data
 
     def vcf_snp_prune(self, in_data = None):
-        """ Returns a VCF file including only lines with SNPs.
+        """ Returns a VCF file including only lines containing SNPs.
             
             Keyword arguments:
             in_data-- VCF file data.
@@ -146,15 +149,13 @@ class InData(object):
 
     def variants_from_sequence(self):
         """ Returns a list of variants from a reference sequence.
-            
-
+            Intended for use with FASTA input, but will work with any AlignIO object or
+            list of sequence data.
         """
         for seq_line in self.sequence:
-            print seq_line
             if len(seq_line) > len(self.ref_seq):
                 print "Error! A sequence line is longer than the reference sequence!"
             diffs = [i for i in xrange(len(self.ref_seq)) if self.ref_seq[i] != seq_line[i]] #All indexes where the sequence does not match
-            print diffs
             curdiffs = []
             for diff_pos in diffs:
                 self.variantset.add(str(diff_pos)+seq_line[diff_pos]) #Each addition to variantset will thus be unique, since using a set
@@ -209,8 +210,10 @@ class InData(object):
             
                 alt_alleles  = cols[self.vcf_alt].split(",") #List of ALT alleles for this row
                 for allele_pos, assigned_allele in enumerate(assigned_alleles): #Iterates through the alleles
-                    if int(assigned_allele) == 0: #Assigned_allele will be 0 for REF and >0 for any ALT
+                    if assigned_allele == "0": #Assigned_allele will be 0 for REF and >0 for any ALT
                         genotype_sequence[changed_genotype_names[allele_pos]].append(cols[self.vcf_ref])
+                    elif assigned_allele == ".": #VCF format code for missing allele
+                        genotype_sequence[changed_genotype_names[allele_pos]].append("N")
                     else:
                         genotype_sequence[changed_genotype_names[allele_pos]].append(alt_alleles[int(assigned_allele)-1])
                         if changed_genotype_names[allele_pos] in self.variants: #Keys added to self.variants here
@@ -354,7 +357,7 @@ class PhyloTree(object):
 
 
 class Imputation(object):
-    """Imputation of missing mutations given input data and a phylogenetic tree
+    """Imputation of missing mutations given input data and a phylogenetic tree.
     """
 
     def __init__(self, indata, tree):
@@ -420,8 +423,9 @@ class Imputation(object):
         print "\n"
 
 
-
 class ReferenceData(object):
+    """Data from object or text files for assessment of false negative rates.
+    """
 
     def __init__(self, haplogroupfile):
         self.haplogroups = {}  # Trusted haplogroups
