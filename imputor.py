@@ -11,11 +11,13 @@ import os
 import sys
 import random
 import glob
+import math
 import argparse
 from argparse import RawTextHelpFormatter
 import pickle
 import threading
 import multiprocessing
+import operator
 from Bio import AlignIO
 from Bio import Phylo
 from Bio.Phylo.Applications import PhymlCommandline
@@ -289,7 +291,7 @@ class PhyloTree(object):
 
             Keyword arguments:
             clade -- current node of tree
-            kids --lost of all collected children
+            kids --list of all collected children
             depth -- current depth of search
             maxdepth -- maximum depth of search
         """
@@ -313,6 +315,36 @@ class PhyloTree(object):
                 kids.append(child)
             self.collect_all_kids(child, kids)
         return kids
+
+    def get_siblings(self, clade):
+        siblings = []
+        if clade in phytree.treeparents:  # Will not go past the root clade
+            for kid in phytree.treeparents[clade]:
+                if kid == clade:
+                    pass
+                else:
+                    siblings.append(kid)
+        return siblings
+
+
+    def collect_kids_rootward(self, clade):
+        kids = []
+        print "\n*********" + str(clade)
+        for child in clade:
+            if child.name:
+                kids.append(child)
+        # print kids
+
+    # def detect_back_mutation(self, clade, indata):
+    #     # self.collect_kids_rootward(clade)
+    #     # print "******* " + str(clade)
+    #     # sibs = self.get_siblings(clade)
+    #     # for sib in sibs:
+    #     #     print str(sib)
+    #     #
+    #     # if clade in phytree.treeparents:  # Will not go past the root clade
+    #     #     self.detect_back_mutation(self.treeparents[clade])
+
 
     def parsimony_tree(self):
         """ Constructs a tree via maximum parsimony using Biopython's ParsimonyTreeConstructor.
@@ -377,29 +409,50 @@ class Imputation(object):
     """Imputation of missing mutations given input data and a phylogenetic tree.
     """
 
-    def __init__(self, indata, tree):
+    def __init__(self, indata, tree, mutrate, threshold):
         self.cpucount = multiprocessing.cpu_count()
         self.workseq = {}
         self.imputedseq = MultipleSeqAlignment([])
+        self.indata = indata
+        self.tree = tree
+        self.mutrate = mutrate
+        self.threshold = threshold
 
-    def impute(self, depth):
+        for seq in indata.sequence:
+            self.workseq[seq.name] = list(str(seq.seq))  # Begin with output sequence matching input
+
+    def impute(self, imputetype, depth):
         """ Sets up multiprocessing of imputation function for all terminal nodes.
 
             Keyword arguments:
             depth -- Depth of search up and down tree to find neighbours.
         """
-        for seq in indata.sequence:
-            self.workseq[seq.name] = list(str(seq.seq))  # Begin with output sequence matching input
+
         impute_threads = []
         terms = phytree.tree.get_terminals()  # Get all internal nodes on tree. These are the ones with samples.
         random.shuffle(terms)  # Randomize list so no ordering effects
-        for term in terms:
-            t = threading.Thread(target=self.impute_missing, args=(term, depth,))
-            t.start()
-            impute_threads.append(t)
-        for thread in impute_threads:  # Block until all complete
-            thread.join()
+        if imputetype == "reference":
+            print "Imputation from reference sequence not yet implemented."
+            return
+        elif imputetype == "depth":
+            for term in terms:
+                t = threading.Thread(target=self.impute_missing, args=(term, depth,))
+                t.start()
+                impute_threads.append(t)
+            for thread in impute_threads:  # Block until all complete
+                thread.join()
+        else: #default parsimony
+            # for term in terms:
+            #     self.detect_back_mutation(term, terms)
+            for term in terms:
+                t = threading.Thread(target=self.detect_back_mutation, args=(term, terms,))
+                t.start()
+                impute_threads.append(t)
+            for thread in impute_threads:  # Block until all complete
+                thread.join()
         self.process_imputed()
+
+
 
     def impute_missing(self, term, depth):
         """Imputes missing mutations.
@@ -409,7 +462,6 @@ class Imputation(object):
             depth -- Depth of search up and down tree to find neighbours.
         """
 
-        termvars = indata.variants[str(term)]  # extract all the variants
         theparent = None
         curnode = term
         for x in range(0, depth):  #Descend tree to user-specified depth
@@ -426,6 +478,7 @@ class Imputation(object):
                 for thisvar in thesevars:
                     neighbour_variantset.add(thisvar)
             for curvar in neighbour_variantset:
+                orig = curvar[-1:]
                 present = 0
                 curpresent = False
                 for kid in allkids:
@@ -444,6 +497,44 @@ class Imputation(object):
         for key, value in self.workseq.iteritems():
             seqrec = SeqRecord(Seq("".join(value)), id=key, name=key, description="Imputed Sequence")
             self.imputedseq.append(seqrec)
+
+    def detect_back_mutation(self, term, terms):
+        # print "\n*****" + str(term)
+        dists = {}
+        for other in terms:
+            if term != other:
+                path = self.tree.tree.trace(term, other)
+                dists[other] = len(path)
+                # print str(path) + " : " + str(len(path))
+        sorted_dists = sorted(dists.items(), key=operator.itemgetter(1)) #Tuple sorted by value
+
+        # for sorted_other in sorted_dists:
+        #     print str(sorted_other[0]) + ": " + str(sorted_other[1])
+
+        for curvar in self.indata.variantset: #ALL variants in sample
+            # print "For variant: " + str(curvar)
+            origseq = self.workseq[str(term)][int(curvar[:-1])]
+            nearest = []
+            for sorted_other in sorted_dists:
+                sortseq = self.workseq[str(sorted_other[0])][int(curvar[:-1])]
+                if sortseq == "A" or sortseq == "C" or sortseq == "G" or sortseq == "T":
+                    nearest.append(sortseq)
+
+            if (origseq == "N" or origseq == "." or origseq == "-") and len(nearest) > 1:
+               if (nearest[0] == nearest[1]) and origseq != nearest[0]:
+                   #print str(curvar)  + " missing? would change to a " + nearest[0]
+                   self.workseq[str(term)][int(curvar[:-1])] = nearest[0]
+            elif (sortseq == "A" or sortseq == "C" or sortseq == "G" or sortseq == "T") and len(nearest) > 2:
+                if (nearest[0] == nearest[1]) and (nearest[0] == nearest[2]) and origseq != nearest[0]:
+                    for outgrp in xrange(2, len(nearest)):
+                        if nearest[outgrp] == origseq:
+                            # print str(term) + " Reversion? " + str(curvar) + " " + str(origseq) + ": " +str(nearest)
+                            theparent = self.tree.treeparents[term]
+                            pk = ((mutrate ** 1) * (math.exp(-mutrate)))/ math.factorial(1)
+                            # print "length of term branch " + str(self.tree.tree.distance(theparent, term)) + " time " + str(self.tree.tree.distance(theparent, term) / mutrate) + " chance: " + str(pk)
+                            if pk < self.threshold:
+                                self.workseq[str(term)][int(curvar[:-1])] = nearest[0]
+
 
 
 class ChromStats(object):
@@ -483,6 +574,9 @@ class ChromStats(object):
                 raw_data.append(file_line.rstrip())
 
 
+
+
+
 if __name__ == "__main__":
     print "\n\n***IMPUTOR ***\n\n"
     
@@ -500,6 +594,9 @@ if __name__ == "__main__":
     parser.add_argument('-hapobj', metavar='<hapobj>', help='Haplogroups file.')
     parser.add_argument('-wtobj', metavar='<wtobj>', help='Weights file.')
     parser.add_argument('-polyobj', metavar='<polyobj>', help='Polymorphisms file.')
+    parser.add_argument('-impute', metavar='<impute>',help='Imputation.', default='pars')
+    parser.add_argument('-mutrate', metavar='<mutrate>', help='Mutation rate.', default='8.71e-10')
+    parser.add_argument('-threshold', metavar='<threshold>', help='Acceptance threhsold for imputation.', default='0.05')
 
 
     args = parser.parse_args()
@@ -513,6 +610,10 @@ if __name__ == "__main__":
     wtobj = args.wtobj
     polyobj = args.polyobj
     depth = int(args.depth)
+    imputetype = args.impute
+    mutrate = float(args.mutrate)
+    threshold = float(args.threshold)
+
     
 
     print "Working in" + os.getcwd() + " on " + inputfile + " and " + reffile + " using " + treetype
@@ -531,19 +632,23 @@ if __name__ == "__main__":
     phytree = PhyloTree()
     phytree.input_tree(treetype = treetype, alpha = alpha, bootstrap = bootstrap, rmodel = rmodel)
     print phytree.tree
-    # Phylo.draw_ascii(phytree.tree)
+    Phylo.draw_ascii(phytree.tree)
 
     print "\n****************\nIMPUTATION\n****************\n\n"
-    impute = Imputation(indata, phytree)
-    impute.impute(depth)
+    impute = Imputation(indata, phytree, mutrate, threshold)
+    impute.impute(imputetype, depth)
     impute.imputedseq.sort()
     print impute.imputedseq
 
+
+
+
     # print "\n****************\nFALSE NEGATIVES\n****************\n\n"
     # stats = ChromStats(indata, hapobj, wtobj, polyobj)
-    # print stats.haplogroups
-    # print stats.weights
-    # print stats.polys
+    # #print stats.haplogroups
+    # #print stats.weights
+    # #print stats.polys
+
 
 
 else:
