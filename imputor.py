@@ -427,13 +427,19 @@ class Imputation(object):
             Keyword arguments:
             depth -- Depth of search up and down tree to find neighbours.
         """
-
+        # print phytree.treeparents
         impute_threads = []
         terms = phytree.tree.get_terminals()  # Get all internal nodes on tree. These are the ones with samples.
         random.shuffle(terms)  # Randomize list so no ordering effects
         if imputetype == "reference":
-            print "Imputation from reference sequence not yet implemented."
-            return
+            for term in terms:
+                self.impute_by_reference(term)
+            # for term in terms:
+            #     t = threading.Thread(target=self.impute_by_reference, args=(term,))
+            #     t.start()
+            #     impute_threads.append(t)
+            for thread in impute_threads:  # Block until all complete
+                thread.join()
         elif imputetype == "depth":
             for term in terms:
                 t = threading.Thread(target=self.impute_missing, args=(term, depth,))
@@ -445,7 +451,7 @@ class Imputation(object):
             # for term in terms:
             #     self.detect_back_mutation(term, terms)
             for term in terms:
-                t = threading.Thread(target=self.detect_back_mutation, args=(term, terms,))
+                t = threading.Thread(target=self.impute_by_parsimony, args=(term, terms,))
                 t.start()
                 impute_threads.append(t)
             for thread in impute_threads:  # Block until all complete
@@ -487,18 +493,59 @@ class Imputation(object):
                         present = present + 1
                         if term == kid:
                             curpresent = True
-                if curpresent:
+                if curpresent: #Current
                     pass
                 else:
                    if len(allkids) > 2 and float(present) / float(len(allkids)) > 0.5:
                         self.workseq[str(term)][int(curvar[:-1])] = curvar[-1:]
 
-    def process_imputed(self):
-        for key, value in self.workseq.iteritems():
-            seqrec = SeqRecord(Seq("".join(value)), id=key, name=key, description="Imputed Sequence")
-            self.imputedseq.append(seqrec)
+    def impute_by_reference(self, term):
+        """Imputes missing mutations.
 
-    def detect_back_mutation(self, term, terms):
+            Keyword arguments:
+            term -- Terminal node to be compared to neighbours.
+
+        """
+        # print "\n******\n For term: " + str(term)
+        for curvar in self.indata.variantset:  # ALL variants in sample
+            origseq = self.workseq[str(term)][int(curvar[:-1])]
+            # print "\nFor variant: " + str(curvar) + " : " + origseq
+            nearest = set()
+            curnode = term
+            while len(nearest) < 2:
+                if curnode in phytree.treeparents:  # Will not go past the root clade, which has no parent
+                    theparent = phytree.treeparents[curnode]  # Should be an internal clade with no associated sample
+                    empty = []
+                    # print "curnode: " + str(curnode) + " parent: " + str(theparent)
+                    allkids = phytree.collect_kids(theparent, empty, 0, depth)
+                    for kid in allkids:
+                        if kid != term:
+                            nearest.add(kid)
+                else:
+                    break
+                curnode = theparent
+
+            nearseq = []
+
+            for kid in nearest:
+                # print kid
+                kidseq = self.workseq[str(kid)][int(curvar[:-1])]
+                nearseq.append(kidseq)
+
+            # print "target: " + origseq + " neighbors: " + str(nearseq)
+            if (origseq == "N" or origseq == "." or origseq == "-") and len(nearseq) >= 2:
+                if (nearseq[0] == nearseq[1]):
+                    # print "\n******IMPUTE? For term: " + str(term) + " For variant: " + str(curvar) + " : " + origseq
+                    # print "orig:" + str(origseq) + " ref: " + refseq + " nearseq: " + str(nearseq)
+                    self.workseq[str(term)][int(curvar[:-1])] = nearseq[0]
+            elif (origseq == "A" or origseq == "C" or origseq == "G" or origseq == "T") and len(nearseq) >= 2:
+                refseq = indata.ref_seq[int(curvar[:-1])]
+                # print "IMPUTE? orig:" + str(origseq) + " ref: " + refseq + " nearseq: " + str(nearseq)
+                if (nearseq[0] == nearseq[1]) and (origseq != nearseq[0]) and (origseq == refseq):
+                    self.workseq[str(term)][int(curvar[:-1])] = nearseq[0]
+                    # print "IMPUTE? orig:" + str(origseq) + " ref: " + refseq + " nearseq: " + str(nearseq)
+
+    def impute_by_parsimony(self, term, terms):
         # print "\n*****" + str(term)
         dists = {}
         for other in terms:
@@ -535,7 +582,10 @@ class Imputation(object):
                             if pk < self.threshold:
                                 self.workseq[str(term)][int(curvar[:-1])] = nearest[0]
 
-
+    def process_imputed(self):
+        for key, value in self.workseq.iteritems():
+            seqrec = SeqRecord(Seq("".join(value)), id=key, name=key, description="Imputed Sequence")
+            self.imputedseq.append(seqrec)
 
 class ChromStats(object):
     """Data from object or text files for assessment of false negative rates.
