@@ -409,7 +409,7 @@ class Imputation(object):
     """Imputation of missing mutations given input data and a phylogenetic tree.
     """
 
-    def __init__(self, indata, tree, mutrate, threshold):
+    def __init__(self, indata, tree, mutrate, threshold, tstv):
         self.cpucount = multiprocessing.cpu_count()
         self.workseq = {}
         self.imputedseq = MultipleSeqAlignment([])
@@ -417,6 +417,7 @@ class Imputation(object):
         self.tree = tree
         self.mutrate = mutrate
         self.threshold = threshold
+        self.tstv = tstv
 
         for seq in indata.sequence:
             self.workseq[seq.name] = list(str(seq.seq))  # Begin with output sequence matching input
@@ -577,15 +578,38 @@ class Imputation(object):
                         if nearest[outgrp] == origseq:
                             # print str(term) + " Reversion? " + str(curvar) + " " + str(origseq) + ": " +str(nearest)
                             theparent = self.tree.treeparents[term]
-                            pk = ((mutrate ** 1) * (math.exp(-mutrate)))/ math.factorial(1)
-                            # print "length of term branch " + str(self.tree.tree.distance(theparent, term)) + " time " + str(self.tree.tree.distance(theparent, term) / mutrate) + " chance: " + str(pk)
-                            if pk < self.threshold:
-                                self.workseq[str(term)][int(curvar[:-1])] = nearest[0]
+                            tstv = self.transversionchk(nearest[0], self.workseq[str(term)][int(curvar[:-1])],  self.tstv)
+                            if tstv > 0:
+                                pk = ((mutrate ** 1) * (math.exp(-mutrate)))/ math.factorial(1) * tstv
+                                # print "length of term branch " + str(self.tree.tree.distance(theparent, term)) + " time " + str(self.tree.tree.distance(theparent, term) / mutrate) + " tstv " + str(tstv) + " chance: " + str(pk)
+                                if pk < self.threshold:
+                                    self.workseq[str(term)][int(curvar[:-1])] = nearest[0]
 
     def process_imputed(self):
         for key, value in self.workseq.iteritems():
             seqrec = SeqRecord(Seq("".join(value)), id=key, name=key, description="Imputed Sequence")
             self.imputedseq.append(seqrec)
+
+    def transversionchk(self, a, b, tstv):
+        # print "from " + str(a) + " to " + str(b)
+        if a == "A":
+            if b == "G":
+                return tstv
+        if a == "G":
+            if b == "A":
+                return tstv
+        if a == "C":
+            if b == "T":
+                return tstv
+        if a == "T":
+            if b == "C":
+                return tstv
+        if a in ("A", "C", "G", "T") and b in ("A", "C", "G", "T"):
+            return 1/tstv
+        return -1
+
+
+
 
 class ChromStats(object):
     """Data from object or text files for assessment of false negative rates.
@@ -646,8 +670,9 @@ if __name__ == "__main__":
     parser.add_argument('-polyobj', metavar='<polyobj>', help='Polymorphisms file.')
     parser.add_argument('-impute', metavar='<impute>',help='Imputation.', default='pars')
     parser.add_argument('-mutrate', metavar='<mutrate>', help='Mutation rate.', default='8.71e-10')
-    parser.add_argument('-threshold', metavar='<threshold>', help='Acceptance threhsold for imputation.', default='0.05')
-
+    parser.add_argument('-threshold', metavar='<threshold>', help='Acceptance threhsold for imputation.',
+                    default='0.05')
+    parser.add_argument('-tstv', metavar='<tstv>', help='Transition/travsersion ratio.', default='2.0')
 
     args = parser.parse_args()
     inputfile = args.file
@@ -663,6 +688,7 @@ if __name__ == "__main__":
     imputetype = args.impute
     mutrate = float(args.mutrate)
     threshold = float(args.threshold)
+    tstv = float(args.tstv)
 
     
 
@@ -685,7 +711,7 @@ if __name__ == "__main__":
     Phylo.draw_ascii(phytree.tree)
 
     print "\n****************\nIMPUTATION\n****************\n\n"
-    impute = Imputation(indata, phytree, mutrate, threshold)
+    impute = Imputation(indata, phytree, mutrate, threshold, tstv)
     impute.impute(imputetype, depth)
     impute.imputedseq.sort()
     print impute.imputedseq
