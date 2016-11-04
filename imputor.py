@@ -19,12 +19,14 @@ import threading
 import multiprocessing
 import operator
 from Bio import AlignIO
+from Bio import SeqIO
 from Bio import Phylo
 from Bio.Phylo.Applications import PhymlCommandline
 from Bio.Phylo.Applications import RaxmlCommandline
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 from Bio.Align import MultipleSeqAlignment
+import progressbar
 
 
 class InData(object):
@@ -65,7 +67,7 @@ class InData(object):
             self.ref_seq = pickle.load(refobj)
         elif reffile[-3:] == 'txt':
             ref_data = open(reffile, 'r')
-            self.ref_seq = ref_data.read()
+            self.ref_seq = ref_data.read().rstrip()
         else:
             print "Error. Not a known reference sequence type."
         return
@@ -113,7 +115,11 @@ class InData(object):
             in_data-- VCF file data.
         """
         expanded_file_data = []
-        for file_line in in_data:
+        print "Expanding multi-allele entries..."
+        bar = progressbar.ProgressBar(redirect_stdout=True)
+        for i in bar(range(len(in_data))):
+        # for file_line in in_data:
+            file_line = in_data[i]
             cols = file_line.split('\t')
             if (file_line[:1] == "#") or (cols[self.vcf_chrom] == '\n'): #If the second character is a (meta-info line) or a blank line, ignore
                 continue
@@ -134,7 +140,11 @@ class InData(object):
             in_data-- VCF file data.
         """
         snps_data = []
-        for file_line in in_data:
+        print "Pruning non-SNP entries..."
+        bar = progressbar.ProgressBar(redirect_stdout=True)
+        for i in bar(range(len(in_data))):
+            file_line = in_data[i]
+        # for file_line in in_data:
             cols = file_line.split('\t')
             if (file_line[:1] == "#") or (cols[self.vcf_chrom] == '\n'): #If the second character is a (meta-info line) or a blank line, ignore
                 continue
@@ -152,9 +162,15 @@ class InData(object):
             Intended for use with FASTA input, but will work with any AlignIO object or
             list of sequence data.
         """
-        for seq_line in self.sequence:
-            if len(seq_line) > len(self.ref_seq):
-                print "Error! A sequence line is longer than the reference sequence!"
+        print "Generating variants from sequence..."
+        bar = progressbar.ProgressBar(redirect_stdout=True)
+        for i in bar(range(len(self.sequence))):
+            seq_line = self.sequence[i]
+        # for seq_line in self.sequence:
+            if len(seq_line) != len(self.ref_seq):
+                print "Error! A sequence line is a different size" ,  len(seq_line) , "than the reference sequence!" , len(self.ref_seq)
+                print seq_line
+                return
             diffs = [i for i in xrange(len(self.ref_seq)) if self.ref_seq[i] != seq_line[i]] # All indexes where the sequence does not match
             curdiffs = []
             for diff_pos in diffs:
@@ -164,13 +180,17 @@ class InData(object):
         return
 
     def seq_from_variants(self, raw_data = None):
-        """ Generates sequence data from the variants drived from a VCF file.
+        """ Generates sequence data from the variants derived from a VCF file.
             Sequence generated includes only polymorphic sites for the sake of brevity.
             
             Keyword arguments:
             raw_data-- VCF file data.
         """
-        for file_line in raw_data:
+        print "Generating sequence..."
+        bar = progressbar.ProgressBar(redirect_stdout=True)
+        for i in bar(range(len(raw_data))):
+            file_line = raw_data[i]
+        # for file_line in raw_data:
             cols = file_line.split('\t')
                 
             # Locate header line and read genotype names
@@ -208,17 +228,23 @@ class InData(object):
                     if changed_genotype_name in genotype_sequence:
                         pass
                     else:
-                        genotype_sequence[changed_genotype_name] = [] # Each genotype begins with the reference sequence placed in all valueus
+                        # genotype_sequence[changed_genotype_name] = [] # Each genotype begins with the reference sequence placed in all valueus
+                        genotype_sequence[changed_genotype_name] = ref_seq_list
+
                             
             
                 alt_alleles  = cols[self.vcf_alt].split(",") #List of ALT alleles for this row
+                # print alt_alleles
                 for allele_pos, assigned_allele in enumerate(assigned_alleles): #Iterates through the alleles
                     if assigned_allele == "0": #Assigned_allele will be 0 for REF and >0 for any ALT
-                        genotype_sequence[changed_genotype_names[allele_pos]].append(cols[self.vcf_ref])
+                        # genotype_sequence[changed_genotype_names[allele_pos]].append(cols[self.vcf_ref])
+                        pass
                     elif assigned_allele == ".": #VCF format code for missing allele
-                        genotype_sequence[changed_genotype_names[allele_pos]].append("N")
+                        # genotype_sequence[changed_genotype_names[allele_pos]].append("N")
+                        genotype_sequence[changed_genotype_names[allele_pos]][int(cols[self.vcf_pos])] = "N"
                     else:
-                        genotype_sequence[changed_genotype_names[allele_pos]].append(alt_alleles[int(assigned_allele)-1])
+                        # genotype_sequence[changed_genotype_names[allele_pos]].append(alt_alleles[int(assigned_allele)-1])
+                        genotype_sequence[changed_genotype_names[allele_pos]][int(cols[self.vcf_pos])] = alt_alleles[int(assigned_allele)-1]
                         if changed_genotype_names[allele_pos] in self.variants: #Keys added to self.variants here
                             self.variants[changed_genotype_names[allele_pos]].append( #to avoid empty entries
                                 cols[self.vcf_pos]+alt_alleles[int(assigned_allele) - 1])
@@ -233,6 +259,7 @@ class InData(object):
 
         for geno in genotype_sequence.keys():
             genotype_sequence[geno] = ''.join(genotype_sequence[geno])
+
         
         
         #Write to a FASTA file so that it can be read in as a
@@ -248,6 +275,8 @@ class InData(object):
             outfile.write("\n")
         outfile.close()
         self.sequence = AlignIO.read('vcf_seq_temp.fasta', 'fasta')
+        # print "SEQUENCE CHECK"
+        # print self.sequence
 
 
 class PhyloTree(object):
@@ -267,6 +296,8 @@ class PhyloTree(object):
 
         self.treetype = treetype
         self.tree = None
+
+        print "Generating phylogenetic tree..."
 
         if self.treetype[-3:] == 'xml':
             self.tree = Phylo.read(treetype, "phyloxml")
@@ -350,6 +381,7 @@ class PhyloTree(object):
         """ Constructs a tree via maximum parsimony using Biopython's ParsimonyTreeConstructor.
 
         """
+        print "Generating maximum parsimony tree.."
         scorer = ParsimonyScorer()
         searcher = NNITreeSearcher(scorer)
         constructor = ParsimonyTreeConstructor(searcher)
@@ -363,7 +395,7 @@ class PhyloTree(object):
             rmodel -- model type for input into RAxML.
 
         """
-
+        print "Invoking RAxML..."
         # Erase RaXML intermediate files from previous runs
         raxml_glob = glob.glob('RAxML_*')
         for delfile in raxml_glob:
@@ -391,6 +423,7 @@ class PhyloTree(object):
             See docs for PhyML installation and setup.
 
         """
+        print "Invoking PhyML..."
         # Output sequence to a temp FASTA file
         tempfastafile = indata.filebase + "_fastatmp.fasta"
         AlignIO.write(indata.sequence, tempfastafile, "fasta")
@@ -415,9 +448,10 @@ class Imputation(object):
         self.imputedseq = MultipleSeqAlignment([])
         self.indata = indata
         self.tree = tree
-        self.mutrate = mutrate
+        self.mu = mutrate
         self.threshold = threshold
         self.tstv = tstv
+        self.imputelist = []
 
         for seq in indata.sequence:
             self.workseq[seq.name] = list(str(seq.seq))  # Begin with output sequence matching input
@@ -432,6 +466,7 @@ class Imputation(object):
         impute_threads = []
         terms = phytree.tree.get_terminals()  # Get all internal nodes on tree. These are the ones with samples.
         random.shuffle(terms)  # Randomize list so no ordering effects
+
         if imputetype == "reference":
             for term in terms:
                 self.impute_by_reference(term)
@@ -448,11 +483,9 @@ class Imputation(object):
                 impute_threads.append(t)
             for thread in impute_threads:  # Block until all complete
                 thread.join()
-        else: #default parsimony
-            # for term in terms:
-            #     self.detect_back_mutation(term, terms)
+        else: # default: parsimony
             for term in terms:
-                t = threading.Thread(target=self.impute_by_parsimony, args=(term, terms,))
+                t = threading.Thread(target=self.impute_tree_pars, args=(term, terms,))
                 t.start()
                 impute_threads.append(t)
             for thread in impute_threads:  # Block until all complete
@@ -580,8 +613,9 @@ class Imputation(object):
                             theparent = self.tree.treeparents[term]
                             tstv = self.transversionchk(nearest[0], self.workseq[str(term)][int(curvar[:-1])],  self.tstv)
                             if tstv > 0:
-                                pk = ((mutrate ** 1) * (math.exp(-mutrate)))/ math.factorial(1) * tstv
-                                # print "length of term branch " + str(self.tree.tree.distance(theparent, term)) + " time " + str(self.tree.tree.distance(theparent, term) / mutrate) + " tstv " + str(tstv) + " chance: " + str(pk)
+                                btime = self.tree.tree.distance(theparent, term)
+                                pk = (((self.mu * btime) ** 1) * (math.exp(-self.mu * btime)))/ math.factorial(1) * tstv
+                                # print "length of term branch " + str(self.tree.tree.distance(theparent, term)) + " time " + str(self.tree.tree.distance(theparent, term) / self.mu) + " tstv " + str(tstv) + " chance: " + str(pk)
                                 if pk < self.threshold:
                                     self.workseq[str(term)][int(curvar[:-1])] = nearest[0]
 
@@ -589,6 +623,7 @@ class Imputation(object):
         for key, value in self.workseq.iteritems():
             seqrec = SeqRecord(Seq("".join(value)), id=key, name=key, description="Imputed Sequence")
             self.imputedseq.append(seqrec)
+        self.imputedseq.sort()
 
     def transversionchk(self, a, b, tstv):
         # print "from " + str(a) + " to " + str(b)
@@ -608,6 +643,90 @@ class Imputation(object):
             return 1/tstv
         return -1
 
+    def impute_tree_pars(self, term, nc):
+        # print "\n******\n For term: " + str(term)
+        neighbours = set()
+        curnode = term
+        while len(neighbours) < nc:
+            # print "working on" , curnode
+            if curnode not in phytree.treeparents:  # Will not go past the root
+                break
+            theparent = phytree.treeparents[curnode]
+            empty = []
+            allkids = phytree.collect_kids(theparent, empty, 0, depth)
+            for kid in allkids:
+                if kid is not term:
+                    neighbours.add(kid)
+                if len(neighbours) >= nc:
+                    break
+            curnode = theparent
+        # print "term: " , term , "neighbours: " , neighbours
+        nearest = []
+        for curvar in self.indata.variantset:  # ALL variants in sample
+            # print "current variant" , curvar
+            # print len(self.workseq[str(term)])
+            origseq = self.workseq[str(term)][int(curvar[:-1])]
+            # print "\nFor variant: " + str(curvar) + " : " + origseq
+            nearmiss = False
+            for neighbour in neighbours:
+                nseq = self.workseq[str(neighbour)][int(curvar[:-1])]
+                if (nseq != "A" and nseq != "C" and nseq != "G" and nseq != "T"):
+                    # print nseq , "nearmiss"
+                    nearmiss = True
+                nearest.append(nseq)
+            if (origseq == "N" or origseq == "." or origseq == "-") and len(nearest) > 1 and nearmiss == False:
+               if (nearest[0] == nearest[1]) and origseq != nearest[0]:
+                   # print str(curvar)  + " missing? would change to a " + nearest[0]
+                   newimpute = [str(term), curvar, origseq, nearest[0]]
+                   self.imputelist.append(newimpute)
+                   self.workseq[str(term)][int(curvar[:-1])] = nearest[0]
+            elif (origseq == "A" or origseq == "C" or origseq == "G" or origseq == "T") and len(nearest) > 2 and nearmiss == False:
+                if (nearest[0] == nearest[1]) and (nearest[0] == nearest[2]) and origseq != nearest[0]:
+                    curparent = theparent
+                    allneighbours = neighbours
+                    backmut = False
+
+                    while curparent in phytree.treeparents:
+                        if backmut == True:
+                            break
+                        nextparent = phytree.treeparents[curparent]
+                        empty = []
+                        allkids = phytree.collect_kids(theparent, empty, 0, depth)
+                        for kid in allkids:
+                            kidseq = self.workseq[str(kid)][int(curvar[:-1])]
+                            if kid not in allneighbours and kidseq == origseq:
+                                # print "backmut?" , origseq, kidseq
+                                backmut = True
+                            allneighbours.add(kid)
+                        curparent = nextparent
+
+                    if backmut == True:
+                        tstv = self.transversionchk(nearest[0], self.workseq[str(term)][int(curvar[:-1])], self.tstv)
+                        if tstv > 0:
+                            btime = self.tree.tree.distance(theparent, term)
+                            pk = (((self.mu * btime) ** 1) * (math.exp(-self.mu * btime))) / math.factorial(1) * tstv
+                            # print "length of term branch " + str(self.tree.tree.distance(theparent, term)) + " time " + str(self.tree.tree.distance(theparent, term) / self.mu) + " tstv " + str(tstv) + " chance: " + str(pk)
+                            if pk < self.threshold:
+                                self.workseq[str(term)][int(curvar[:-1])] = nearest[0]
+                                newimpute = [str(term), curvar, origseq, nearest[0]]
+                                self.imputelist.append(newimpute)
+
+    def output_imputed(self, inputfile, out, impout):
+        filebase, fileext = os.path.splitext(inputfile)
+        if impout == True:
+            impoutfilename = filebase + "-impout.csv"
+            impoutfile = open(impoutfilename, 'w')
+            impoutfile.write("Imputed Mutations")
+            impoutfile.write("ID, VAR, FROM, TO")
+            for imputed in impute.imputelist:
+                impoutfile.write(imputed.split(','))
+
+        if out == "vcf":
+            print "VCF output not yet implemented."
+            return
+        else: # default to fasta
+            outseqfile = filebase + "-seqout.fasta"
+            SeqIO.write(self.imputedseq, outseqfile, "fasta")
 
 
 
@@ -654,8 +773,8 @@ class ChromStats(object):
 if __name__ == "__main__":
     print "\n\n***IMPUTOR ***\n\n"
     
-    parser = argparse.ArgumentParser(description="This script does: \n\n\t"\
-                                     "- .\n\t"\
+    parser = argparse.ArgumentParser(description="IMPUTOR is a program for the phylogeny-aware imputation of: \n\n\t"\
+                                     "mutations.\n\t"\
                                      "- ",formatter_class=RawTextHelpFormatter)
         
     parser.add_argument('-file',metavar='<file>',help='input file: .fasta, .vcf or .var', required=True)
@@ -673,6 +792,8 @@ if __name__ == "__main__":
     parser.add_argument('-threshold', metavar='<threshold>', help='Acceptance threhsold for imputation.',
                     default='0.05')
     parser.add_argument('-tstv', metavar='<tstv>', help='Transition/travsersion ratio.', default='2.0')
+    parser.add_argument('-out', metavar='<out>', help='Output file type: fasta or vcf', default='fasta')
+    parser.add_argument('-impout', metavar='<impout>', help='Output list of imputed mutations', default=True)
 
     args = parser.parse_args()
     inputfile = args.file
@@ -689,8 +810,10 @@ if __name__ == "__main__":
     mutrate = float(args.mutrate)
     threshold = float(args.threshold)
     tstv = float(args.tstv)
+    outtype = args.out
+    impout = args.impout
 
-    
+    sys.setrecursionlimit(10000)
 
     print "Working in" + os.getcwd() + " on " + inputfile + " and " + reffile + " using " + treetype
 
@@ -707,14 +830,17 @@ if __name__ == "__main__":
     print "\n****************\nTREE\n****************\n\n"
     phytree = PhyloTree()
     phytree.input_tree(treetype = treetype, alpha = alpha, bootstrap = bootstrap, rmodel = rmodel)
-    print phytree.tree
     Phylo.draw_ascii(phytree.tree)
 
     print "\n****************\nIMPUTATION\n****************\n\n"
     impute = Imputation(indata, phytree, mutrate, threshold, tstv)
     impute.impute(imputetype, depth)
-    impute.imputedseq.sort()
+    print "Imputed Mutations"
+    print "ID, VAR, FROM, TO"
+    for imputed in impute.imputelist:
+        print imputed.split(',')
     print impute.imputedseq
+    impute.output_imputed(inputfile, outtype, impout)
 
 
 
