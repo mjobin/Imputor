@@ -92,18 +92,18 @@ class InData(object):
             for file_line in file_data:
                 raw_data.append(file_line.rstrip())
             
-            #Split multi-allelic sites
+            # Split multi-allelic sites
             expanded_file_data = self.vcf_expand_multi_allele(raw_data)
 
-            #Prune non-SNPs
+            # Prune non-SNPs
             snps_data = self.vcf_snp_prune(expanded_file_data)
             
-            #Generate variants
+            # Generate variants
             for snp_line in snps_data:
                 cols = snp_line.split('\t')
                 self.variantset.add(cols[self.vcf_pos]+cols[self.vcf_alt])
         
-            #Generate sequence from only those areas with any polymorphism
+            # Generate sequence from only those areas with any polymorphism
             self.seq_from_variants(raw_data)
 
         return
@@ -118,17 +118,20 @@ class InData(object):
         print "Expanding multi-allele entries..."
         bar = progressbar.ProgressBar(redirect_stdout=True)
         for i in bar(range(len(in_data))):
-        # for file_line in in_data:
             file_line = in_data[i]
             cols = file_line.split('\t')
-            if (file_line[:1] == "#") or (cols[self.vcf_chrom] == '\n'): #If the second character is a (meta-info line) or a blank line, ignore
+
+            # If the second character is a (meta-info line) or a blank line, ignore
+            if (file_line[:1] == "#") or (cols[self.vcf_chrom] == '\n'):
                 continue
             if "," in cols[self.vcf_alt]:
                 multi_allele  = cols[self.vcf_alt].split(",")
                 for allele in multi_allele:
-                    allele_cols = cols #A copy of the original line
-                    allele_cols[self.vcf_alt] = allele #Replace the ALT column with just this allele
-                    expanded_file_data.append("\t".join(allele_cols)) #place line line with just this allele in the expanded data
+                    allele_cols = cols
+                    # Replace the ALT column with just this allele
+                    allele_cols[self.vcf_alt] = allele
+                    # Place line with just this allele in the expanded data
+                    expanded_file_data.append("\t".join(allele_cols))
             else:
                 expanded_file_data.append(file_line)
         return expanded_file_data
@@ -144,9 +147,10 @@ class InData(object):
         bar = progressbar.ProgressBar(redirect_stdout=True)
         for i in bar(range(len(in_data))):
             file_line = in_data[i]
-        # for file_line in in_data:
+
             cols = file_line.split('\t')
-            if (file_line[:1] == "#") or (cols[self.vcf_chrom] == '\n'): #If the second character is a (meta-info line) or a blank line, ignore
+            # If the second character is a (meta-info line) or a blank line, ignore
+            if (file_line[:1] == "#") or (cols[self.vcf_chrom] == '\n'):
                 continue
             if len(cols[self.vcf_ref]) > 1 or len(cols[self.vcf_alt]) > 1:  # if not a snp
                 continue
@@ -166,15 +170,14 @@ class InData(object):
         bar = progressbar.ProgressBar(redirect_stdout=True)
         for i in bar(range(len(self.sequence))):
             seq_line = self.sequence[i]
-        # for seq_line in self.sequence:
             if len(seq_line) != len(self.ref_seq):
                 print "Error! A sequence line is a different size" ,  len(seq_line) , "than the reference sequence!" , len(self.ref_seq)
                 print seq_line
                 return
-            diffs = [i for i in xrange(len(self.ref_seq)) if self.ref_seq[i] != seq_line[i]] # All indexes where the sequence does not match
+            diffs = [i for i in xrange(len(self.ref_seq)) if self.ref_seq[i] != seq_line[i]]
             curdiffs = []
             for diff_pos in diffs:
-                self.variantset.add(str(diff_pos)+seq_line[diff_pos]) # Each addition to variantset will thus be unique, since using a set
+                self.variantset.add(str(diff_pos)+seq_line[diff_pos])
                 curdiffs.append(str(diff_pos) + seq_line[diff_pos])
             self.variants[seq_line.name] = curdiffs
         return
@@ -194,10 +197,10 @@ class InData(object):
             cols = file_line.split('\t')
                 
             # Locate header line and read genotype names
-            if (cols[self.vcf_chrom]=='#CHROM'): #H eader line of VCF file
-                if(cols[self.vcf_info+1]=='FORMAT'): # On the header line, is there a FORMAT column next to the fixed columns?
+            if cols[self.vcf_chrom]=='#CHROM':  # Header line of VCF file
+                if cols[self.vcf_info+1]=='FORMAT':  # On header line, a FORMAT column next to the fixed columns?
                     genotype_names = cols[self.vcf_info+2:] # If so, remaining columns are the genotypes
-                    genotype_sequence = {} # Dictionary, thus unique keys. Diploid/triploid sequences will have unique names [name]-#
+                    genotype_sequence = {}  # Dictionary, thus unique keys
                     ref_seq_list =[] # The reference sequence is converted to a list so individual sites can be altered
                     for ref_seq_char in self.ref_seq:
                         ref_seq_list.append(ref_seq_char)
@@ -253,16 +256,10 @@ class InData(object):
                             self.variants[changed_genotype_names[allele_pos]].append(
                                 cols[self.vcf_pos]+alt_alleles[int(assigned_allele) - 1])
 
-
-                        
-
-
         for geno in genotype_sequence.keys():
             genotype_sequence[geno] = ''.join(genotype_sequence[geno])
 
-        
-        
-        #Write to a FASTA file so that it can be read in as a
+        # Write to a FASTA file so that it can be read in as SeqIO
         outfile = open('vcf_seq_temp.fasta', 'w')
         lenchk = -1
         for geno in genotype_sequence.keys():
@@ -275,8 +272,6 @@ class InData(object):
             outfile.write("\n")
         outfile.close()
         self.sequence = AlignIO.read('vcf_seq_temp.fasta', 'fasta')
-        # print "SEQUENCE CHECK"
-        # print self.sequence
 
 
 class PhyloTree(object):
@@ -309,6 +304,18 @@ class PhyloTree(object):
             self.phyml_tree(alpha, bootstrap)
 
         self.treeparents = self.all_parents(self.tree)
+
+    def output_tree(self, inputfile, filetype):
+        """Outputs tree to file
+        """
+        filebase, fileext = os.path.splitext(inputfile)
+        if filetype == 'newick':
+            outfile = filebase + "-out.newick"
+            Phylo.write(self.tree, outfile, "phyloxml")
+        else: # Default Phyloxml
+            outfile = filebase + "-out.xml"
+            Phylo.write(self.tree, outfile, "phyloxml")
+
 
     def all_parents(self, tree):
         parents = {}
@@ -365,17 +372,6 @@ class PhyloTree(object):
             if child.name:
                 kids.append(child)
         # print kids
-
-    # def detect_back_mutation(self, clade, indata):
-    #     # self.collect_kids_rootward(clade)
-    #     # print "******* " + str(clade)
-    #     # sibs = self.get_siblings(clade)
-    #     # for sib in sibs:
-    #     #     print str(sib)
-    #     #
-    #     # if clade in phytree.treeparents:  # Will not go past the root clade
-    #     #     self.detect_back_mutation(self.treeparents[clade])
-
 
     def parsimony_tree(self):
         """ Constructs a tree via maximum parsimony using Biopython's ParsimonyTreeConstructor.
@@ -436,6 +432,7 @@ class PhyloTree(object):
         #print out_log
         phytreefile = tempphyfile + "_phyml_tree.txt"
         self.tree = Phylo.read(phytreefile, "newick")
+
 
 
 class Imputation(object):
@@ -719,7 +716,7 @@ class Imputation(object):
             impoutfile.write("Imputed Mutations")
             impoutfile.write("ID, VAR, FROM, TO")
             for imputed in impute.imputelist:
-                impoutfile.write(imputed.split(','))
+                impoutfile.write(",".join(imputed))
 
         if out == "vcf":
             print "VCF output not yet implemented."
@@ -727,7 +724,6 @@ class Imputation(object):
         else: # default to fasta
             outseqfile = filebase + "-seqout.fasta"
             SeqIO.write(self.imputedseq, outseqfile, "fasta")
-
 
 
 class ChromStats(object):
@@ -780,6 +776,7 @@ if __name__ == "__main__":
     parser.add_argument('-file',metavar='<file>',help='input file: .fasta, .vcf or .var', required=True)
     parser.add_argument('-ref',metavar='<ref>',help='reference sequence, .txt or .obj', required=True)
     parser.add_argument('-tree',metavar='<tree>',help='tree type; <treefilename.xml>, pars, RAxML, PhyML', default='pars')
+    parser.add_argument('-outtree', metavar='<outtree>', help='Output format for tree', default='phyloxml')
     parser.add_argument('-alpha',metavar='<alpha>',help='Value of gamma shape parameter.', default='e')
     parser.add_argument('-boot',metavar='<boot>',help='Number of bootstrap replicates for PhyML.', default='100')
     parser.add_argument('-rmodel',metavar='<rmodel>',help='Model type for RaXML.', default='GTRCAT')
@@ -799,6 +796,7 @@ if __name__ == "__main__":
     inputfile = args.file
     reffile = args.ref
     treetype = args.tree
+    outtreetype = args.outtree
     alpha = args.alpha
     bootstrap = args.boot
     rmodel = args.rmodel
@@ -831,14 +829,17 @@ if __name__ == "__main__":
     phytree = PhyloTree()
     phytree.input_tree(treetype = treetype, alpha = alpha, bootstrap = bootstrap, rmodel = rmodel)
     Phylo.draw_ascii(phytree.tree)
+    phytree.output_tree(inputfile, outtype)
 
     print "\n****************\nIMPUTATION\n****************\n\n"
     impute = Imputation(indata, phytree, mutrate, threshold, tstv)
     impute.impute(imputetype, depth)
-    print "Imputed Mutations"
-    print "ID, VAR, FROM, TO"
-    for imputed in impute.imputelist:
-        print imputed.split(',')
+    if len(impute.imputelist)>0:
+        print "Imputed Mutations"
+        print "ID, VAR, FROM, TO"
+        for imputed in impute.imputelist:
+            print ",".join(imputed)
+        print "\n"
     print impute.imputedseq
     impute.output_imputed(inputfile, outtype, impout)
 
