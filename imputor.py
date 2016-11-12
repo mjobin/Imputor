@@ -69,7 +69,7 @@ class InData(object):
             ref_data = open(reffile, 'r')
             self.ref_seq = ref_data.read().rstrip()
         else:
-            print "Error. Not a known reference sequence type."
+            print "ERROR! Not a known reference sequence type."
         return
 
     def load_input_data(self, inputfile = None):
@@ -86,7 +86,7 @@ class InData(object):
             self.sequence = AlignIO.read(inputfile, 'fasta')
             self.variants_from_sequence()
         elif inputfile[-3:] == 'vcf':
-
+            self.load_ref_seq(reffile=reffile)
             file_data = open(inputfile, 'r')
             raw_data = []
             for file_line in file_data:
@@ -167,14 +167,16 @@ class InData(object):
             list of sequence data.
         """
         print "Generating variants from sequence..."
+
+        firstseq = self.sequence[0]
         bar = progressbar.ProgressBar(redirect_stdout=True)
         for i in bar(range(len(self.sequence))):
             seq_line = self.sequence[i]
-            if len(seq_line) != len(self.ref_seq):
-                print "Error! A sequence line is a different size" ,  len(seq_line) , "than the reference sequence!" , len(self.ref_seq)
+            if len(seq_line) != len(firstseq):
+                print "Error! A sequence line is a different size" ,  len(seq_line) , "than the first sequence!" , len(firstseq)
                 print seq_line
                 return
-            diffs = [i for i in xrange(len(self.ref_seq)) if self.ref_seq[i] != seq_line[i]]
+            diffs = [i for i in xrange(len(firstseq)) if firstseq[i] != seq_line[i]]
             curdiffs = []
             for diff_pos in diffs:
                 self.variantset.add(str(diff_pos)+seq_line[diff_pos])
@@ -305,13 +307,16 @@ class PhyloTree(object):
 
         self.treeparents = self.all_parents(self.tree)
 
-    def output_tree(self, inputfile, filetype):
+    def output_tree(self, inputfile, outtreetype):
         """Outputs tree to file
         """
         filebase, fileext = os.path.splitext(inputfile)
-        if filetype == 'newick':
+        if outtreetype == 'newick':
             outfile = filebase + "-out.newick"
-            Phylo.write(self.tree, outfile, "phyloxml")
+            Phylo.write(self.tree, outfile, "newick")
+        elif outtreetype == 'nexus':
+            outfile = filebase + "-out.nexus"
+            Phylo.write(self.tree, outfile, "nexus")
         else: # Default Phyloxml
             outfile = filebase + "-out.xml"
             Phylo.write(self.tree, outfile, "phyloxml")
@@ -660,8 +665,6 @@ class Imputation(object):
         # print "term: " , term , "neighbours: " , neighbours
         nearest = []
         for curvar in self.indata.variantset:  # ALL variants in sample
-            # print "current variant" , curvar
-            # print len(self.workseq[str(term)])
             origseq = self.workseq[str(term)][int(curvar[:-1])]
             # print "\nFor variant: " + str(curvar) + " : " + origseq
             nearmiss = False
@@ -673,7 +676,6 @@ class Imputation(object):
                 nearest.append(nseq)
             if (origseq == "N" or origseq == "." or origseq == "-") and len(nearest) > 1 and nearmiss == False:
                if (nearest[0] == nearest[1]) and origseq != nearest[0]:
-                   # print str(curvar)  + " missing? would change to a " + nearest[0]
                    newimpute = [str(term), curvar, origseq, nearest[0]]
                    self.imputelist.append(newimpute)
                    self.workseq[str(term)][int(curvar[:-1])] = nearest[0]
@@ -717,7 +719,6 @@ class Imputation(object):
             impoutfile.write("ID, VAR, FROM, TO")
             for imputed in impute.imputelist:
                 impoutfile.write(",".join(imputed))
-
         if out == "vcf":
             print "VCF output not yet implemented."
             return
@@ -774,7 +775,7 @@ if __name__ == "__main__":
                                      "- ",formatter_class=RawTextHelpFormatter)
         
     parser.add_argument('-file',metavar='<file>',help='input file: .fasta, .vcf or .var', required=True)
-    parser.add_argument('-ref',metavar='<ref>',help='reference sequence, .txt or .obj', required=True)
+    parser.add_argument('-ref',metavar='<ref>',help='reference sequence, .txt or .obj')
     parser.add_argument('-tree',metavar='<tree>',help='tree type; <treefilename.xml>, pars, RAxML, PhyML', default='pars')
     parser.add_argument('-outtree', metavar='<outtree>', help='Output format for tree', default='phyloxml')
     parser.add_argument('-alpha',metavar='<alpha>',help='Value of gamma shape parameter.', default='e')
@@ -813,10 +814,11 @@ if __name__ == "__main__":
 
     sys.setrecursionlimit(10000)
 
-    print "Working in" + os.getcwd() + " on " + inputfile + " and " + reffile + " using " + treetype
+    print "Working in" + os.getcwd() + " on " + inputfile +  " using " + treetype
 
     indata = InData()
-    indata.load_ref_seq(reffile = reffile)
+
+
     indata.load_input_data(inputfile = inputfile)
     print "\n****************\nVARIANTS\n****************\n\n"
     for i in indata.variants.keys():
@@ -829,7 +831,7 @@ if __name__ == "__main__":
     phytree = PhyloTree()
     phytree.input_tree(treetype = treetype, alpha = alpha, bootstrap = bootstrap, rmodel = rmodel)
     Phylo.draw_ascii(phytree.tree)
-    phytree.output_tree(inputfile, outtype)
+    phytree.output_tree(inputfile, outtreetype)
 
     print "\n****************\nIMPUTATION\n****************\n\n"
     impute = Imputation(indata, phytree, mutrate, threshold, tstv)
