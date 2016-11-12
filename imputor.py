@@ -439,7 +439,6 @@ class PhyloTree(object):
         self.tree = Phylo.read(phytreefile, "newick")
 
 
-
 class Imputation(object):
     """Imputation of missing mutations given input data and a phylogenetic tree.
     """
