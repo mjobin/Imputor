@@ -473,32 +473,32 @@ class Imputation(object):
         terms = phytree.tree.get_terminals()  # Get all internal nodes on tree. These are the ones with samples.
         random.shuffle(terms)  # Randomize list so no ordering effects
 
-        for term in terms:
-            self.impute_tree_pars(term, terms)
+        # for term in terms:
+        #     self.impute_tree_pars(term, terms)
         #
-        # if imputetype == "reference":
-        #     for term in terms:
-        #         self.impute_by_reference(term)
-        #     # for term in terms:
-        #     #     t = threading.Thread(target=self.impute_by_reference, args=(term,))
-        #     #     t.start()
-        #     #     impute_threads.append(t)
-        #     for thread in impute_threads:  # Block until all complete
-        #         thread.join()
-        # elif imputetype == "depth":
-        #     for term in terms:
-        #         t = threading.Thread(target=self.impute_missing, args=(term, depth,))
-        #         t.start()
-        #         impute_threads.append(t)
-        #     for thread in impute_threads:  # Block until all complete
-        #         thread.join()
-        # else: # default: parsimony
-        #     for term in terms:
-        #         t = threading.Thread(target=self.impute_tree_pars, args=(term, terms,))
-        #         t.start()
-        #         impute_threads.append(t)
-        #     for thread in impute_threads:  # Block until all complete
-        #         thread.join()
+        if imputetype == "reference":
+            for term in terms:
+                self.impute_by_reference(term)
+            # for term in terms:
+            #     t = threading.Thread(target=self.impute_by_reference, args=(term,))
+            #     t.start()
+            #     impute_threads.append(t)
+            for thread in impute_threads:  # Block until all complete
+                thread.join()
+        elif imputetype == "depth":
+            for term in terms:
+                t = threading.Thread(target=self.impute_missing, args=(term, depth,))
+                t.start()
+                impute_threads.append(t)
+            for thread in impute_threads:  # Block until all complete
+                thread.join()
+        else: # default: parsimony
+            for term in terms:
+                t = threading.Thread(target=self.impute_tree_pars, args=(term, terms,))
+                t.start()
+                impute_threads.append(t)
+            for thread in impute_threads:  # Block until all complete
+                thread.join()
         self.process_imputed()
 
     def impute_missing(self, term, depth):
