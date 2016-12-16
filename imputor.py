@@ -82,7 +82,6 @@ class InData(object):
         
         filebase, fileext = os.path.splitext(inputfile)
         self.filebase = filebase
-        
         if inputfile[-5:] == 'fasta':
             self.sequence = AlignIO.read(inputfile, 'fasta')
             self.variants_from_sequence()
@@ -285,8 +284,11 @@ class PhyloTree(object):
         self.tree = None  # Phylogenetic tree to be loaded or constructed from data. Newick format.
         self.btrees = [] #  Bootstrap replicates of trees. Newick format.
         self.treeparents = {}
+        self.btreeparents = []
+        self.starttree = None # Phylogenetic tree used as starting tree in RAxML
 
-    def input_tree(self, treetype=None, alpha=None, bootstrap=None, rmodel=None, indata=None):
+
+    def input_tree(self, treetype=None, alpha=None, bootstrap=None, rmodel=None, starttreename=None):
         """ Takes input tree file or sequence data.
 
             Keyword arguments:
@@ -294,12 +296,22 @@ class PhyloTree(object):
         """
 
         self.treetype = treetype
-        self.tree = None
+        self.starttreename = starttreename
+
+        if self.starttreename:
+            if bootstrap > 0:
+                print "ERROR: May not provide starting tree with boot != 0."
+                sys.exit()
+            if self.starttreename[-3:] == 'xml':
+                self.starttree = Phylo.read(self.starttreename, "phyloxml")
+            elif self.starttreename[-6:] == 'newick':
+                self.starttree = Phylo.read(self.starttreename, "newick")
+
 
         print "Generating phylogenetic tree..."
 
         if self.treetype[-3:] == 'xml':
-            self.tree = Phylo.read(treetype, "phyloxml")
+            self.tree = Phylo.read(self.treetype, "phyloxml")
         elif self.treetype == 'pars':
             self.parsimony_tree()
         elif self.treetype == 'RAxML':
@@ -308,6 +320,11 @@ class PhyloTree(object):
             self.phyml_tree(alpha, bootstrap)
 
         self.treeparents = self.all_parents(self.tree)
+
+        for btree in self.btrees:
+            self.btreeparents.append(self.all_parents(btree))
+
+
 
     def output_tree(self, inputfile, outtreetype):
         """Outputs tree to file
@@ -323,10 +340,9 @@ class PhyloTree(object):
             outfile = filebase + "-out.xml"
             Phylo.write(self.tree, outfile, "phyloxml")
 
-
     def all_parents(self, tree):
         parents = {}
-        for clade in tree.find_clades(order='level'):
+        for clade in tree.find_clades():
             for child in clade:
                 parents[child] = clade
         return parents
@@ -371,14 +387,11 @@ class PhyloTree(object):
                     siblings.append(kid)
         return siblings
 
-
     def collect_kids_rootward(self, clade):
         kids = []
-        print "\n*********" + str(clade)
         for child in clade:
             if child.name:
                 kids.append(child)
-        # print kids
 
     def parsimony_tree(self):
         """ Constructs a tree via maximum parsimony using Biopython's ParsimonyTreeConstructor.
@@ -409,31 +422,42 @@ class PhyloTree(object):
         tempfastafile = indata.filebase + "_fastatmp.fasta"
         AlignIO.write(indata.sequence, tempfastafile, "fasta")
         rng = random.SystemRandom()  # Uses /dev/urandom
-        # raxml_cline = RaxmlCommandline(sequences=tempfastafile, model=rmodel, name="imputor",
-        #                                parsimony_seed=rng.randint(0, sys.maxint), threads=cpus, bootstrap_seed=rng.randint(0, sys.maxint), num_replicates=bootstrap)
 
-        # raxml_cline = RaxmlCommandline(sequences=tempfastafile, model=rmodel, name="imputor",
-        #                                parsimony_seed=rng.randint(0, sys.maxint), threads=cpus, num_replicates=bootstrap)
 
-        raxml_cline = RaxmlCommandline(sequences=tempfastafile, model=rmodel, name="imputor",
-                                       parsimony_seed=rng.randint(0, sys.maxint), threads=cpus)
+        raxml_args = {}
+        raxml_args["sequences"] = tempfastafile
+        raxml_args["model"] = rmodel
+        raxml_args["name"] = "imputor"
+        raxml_args["parsimony_seed"] = rng.randint(0, sys.maxint)
+        raxml_args["threads"] = cpus
+
+
+
+        if self.starttree:
+            print "writing start tree"
+            Phylo.write(self.starttree, "RAxML_imputorstartingtree.newick", "newick")
+            raxml_args["starting_tree"] = "RAxML_imputorstartingtree.newick"
+        elif bs > 0:
+            raxml_args["num_replicates"] = bootstrap
+            raxml_args["algorithm"] = "a"
+            raxml_args['rapid_bootstrap_seed'] = rng.randint(0, sys.maxint)
+
+
+        raxml_cline = RaxmlCommandline(**raxml_args)
+
         out_log, err_log = raxml_cline()
-        print err_log
-        print out_log
-
-        # Import best tree (newick format)
+        if verbose:
+            print err_log
+            print out_log
         self.tree = Phylo.read("RAxML_bestTree.imputor", "newick")
-
-        # #Import bootstrap replicates
-        # self.btrees = Phylo.parse("RAxML_bootstrap.imputor", "newick")
-        #
-        # print "TREEEEEEEE"
-        # for tree in self.btrees:
-        #     print(tree.rooted)
+        if bootstrap>0:
+            self.btrees = list(Phylo.parse("RAxML_bootstrap.imputor", "newick"))
 
         # Erase RaXML intermediate files
-        # for delfile in raxml_glob:
-        #     os.remove(delfile)
+        if not verbose:
+            raxml_glob = glob.glob('RAxML_*')
+            for delfile in raxml_glob:
+                os.remove(delfile)
 
     def phyml_tree(self, alpha=None, boostrap=None):
         """ Constructs a tree via maximum likelihood by invoking external software PhyML.
@@ -446,84 +470,142 @@ class PhyloTree(object):
         AlignIO.write(indata.sequence, tempfastafile, "fasta")
         tempphyfile = indata.filebase + "_phytmp.phy"
         AlignIO.convert(tempfastafile, "fasta", tempphyfile, "phylip-relaxed")
-        cmdline = PhymlCommandline(input=tempphyfile, alpha='e', bootstrap=100)
+
+        phyml_args = {}
+        phyml_args["input"] = tempphyfile
+        phyml_args["alpha"] = "e"
+        if self.starttree:
+            Phylo.write(self.starttree, "PhyML_imputorstartingtree.newick", "newick")
+            phyml_args["input_tree"] = "PhyML_imputorstartingtree.newick"
+        elif bootstrap > 0:
+            phyml_args["bootstrap"] = bootstrap
+
+        cmdline = PhymlCommandline(**phyml_args)
         print "Commandline for PhyML: " + str(cmdline)
         out_log, err_log = cmdline()
-        #print err_log
-        #print out_log
+        if verbose:
+            print err_log
+            print out_log
         phytreefile = tempphyfile + "_phyml_tree.txt"
         self.tree = Phylo.read(phytreefile, "newick")
-        # phybtreefile = tempphyfile + "_phyml_boot_trees.txt"
-        # self.btrees = Phylo.parse(phybtreefile, "newick")
-        # print "TREEEEEEEE"
-        # for tree in self.btrees:
-        #     print tree
+        if bootstrap > 0:
+            phybtreefile = tempphyfile + "_phyml_boot_trees.txt"
+            self.btrees = Phylo.parse(phybtreefile, "newick")
 
 
 class Imputation(object):
     """Imputation of missing mutations given input data and a phylogenetic tree.
     """
 
-    def __init__(self, indata, tree, mutrate, threshold, tstv, multi, bmchk):
+    def __init__(self, indata, phytree, mutrate, threshold, tstv, multi, bmchk, brchk):
         self.cpucount = multiprocessing.cpu_count()
         self.workseq = {}
         self.imputedseq = MultipleSeqAlignment([])
         self.indata = indata
-        self.tree = tree
+        self.phytree = phytree
         self.mu = mutrate
         self.threshold = threshold
         self.tstv = tstv
         self.imputelist = []
+        self.bootreps = {}
         self.multi = multi
         self.bmchk = bmchk
+        self.acgt = set(['A', 'C', 'G', 'T'])
+        self.missing = set(['.', '-', 'N'])
+        self.brchk = brchk
 
         for seq in indata.sequence:
             self.workseq[seq.name] = list(str(seq.seq))  # Begin with output sequence matching input
 
-    def impute(self, imputetype, depth, neighbors):
+
+    def impute(self, imputetype, depth, neighbors, bootstrap):
         """ Sets up multiprocessing of imputation function for all terminal nodes.
 
             Keyword arguments:
+            imputetype -- Type of search used to locate possible sites to impute.
             depth -- Depth of search up and down tree to find neighbours.
-        """
-        # print phytree.treeparents
-        impute_threads = []
-        terms = phytree.tree.get_terminals()  # Get all internal nodes on tree. These are the ones with samples.
-        random.shuffle(terms)  # Randomize list so no ordering effects
+            neighbors -- Minimum number of identical non-missing neighbors in order to impute.
+            bootstrap -- Number of bootstrap replicates.
 
-        if multi is True:
-            if imputetype == "reference":
+        """
+
+        impute_threads =[]
+
+        if bootstrap > 0: # Bootstrap replicates
+            self.brchk = False # No need to check branch lengths when comparing bootstrap
+            bpar = iter(phytree.btreeparents)
+            for btree in self.phytree.btrees:
+                terms = btree.get_terminals()
+                random.shuffle(terms)
+                bparents = next(bpar)
                 for term in terms:
-                    t = threading.Thread(target=self.impute_by_reference, args=(term,))
+                    t = threading.Thread(target=self.impute_bootstrap, args=(term, btree, bparents, neighbors))
                     t.start()
                     impute_threads.append(t)
                 for thread in impute_threads:  # Block until all complete
                     thread.join()
-            elif imputetype == "depth":
-                for term in terms:
-                    t = threading.Thread(target=self.impute_missing, args=(term, depth,))
-                    t.start()
-                    impute_threads.append(t)
-                for thread in impute_threads:  # Block until all complete
-                    thread.join()
-            else: # default: parsimony
-                for term in terms:
-                    t = threading.Thread(target=self.impute_tree_pars, args=(term, neighbors,))
-                    t.start()
-                    impute_threads.append(t)
-                for thread in impute_threads:  # Block until all complete
-                    thread.join()
+
+
+            for bootrep in self.bootreps:
+                if(self.bootreps[bootrep][0]/self.bootreps[bootrep][1] > (1-self.threshold)):
+                    newimpute = bootrep.split("-")
+                    newimpute.append(str(self.bootreps[bootrep][0]/self.bootreps[bootrep][1]))
+                    self.imputelist.append(newimpute)
+                    self.workseq[newimpute[0]][int(newimpute[1][:-1])] = newimpute[3]
+
+
         else:
-            if imputetype == "reference":
-                for term in terms:
-                    self.impute_by_reference(term)
-            elif imputetype == "depth":
-                for term in terms:
-                    self.impute_missing(term, depth)
-            else: # default: parsimony
-                for term in terms:
-                    self.impute_tree_pars(term, neighbors)
+            Phylo.draw_ascii(self.phytree.tree)
+            terms = self.phytree.tree.get_terminals()  # Get all internal nodes on tree. These are the ones with samples.
+            random.shuffle(terms)
+            for term in terms:
+                t = threading.Thread(target=self.impute_threshold, args=(term, self.phytree.tree, self.phytree.treeparents, neighbors))
+                t.start()
+                impute_threads.append(t)
+            for thread in impute_threads:  # Block until all complete
+                thread.join()
+            for newimpute in self.imputelist:
+                if float(newimpute[4]) < self.threshold:
+                    self.workseq[newimpute[0]][int(newimpute[1][:-1])] = newimpute[3]
+
         self.process_imputed()
+
+
+    def impute_bootstrap(self, term, btree, bparents, neighbors):
+        """ Imputation with bootstrap replicates.
+
+            Keyword arguments:
+            term -- Terminal node on tree to be examined.
+            btree -- Tree to be examined.
+            bparents - List of parent nodes of each node in tree.
+            neighbors -- Minimum number of identical neighbors to impute.
+
+        """
+        for curvar in self.indata.variantset:
+            newimpute = self.detect_by_parsimony(term, btree, curvar,
+                                                 bparents, neighbors)
+
+            bootfront = "-".join(newimpute[0:4])
+            if bootfront not in self.bootreps:
+                self.bootreps[bootfront] = [0,0]
+            if newimpute[4] == "1":
+                self.bootreps[bootfront][0] = self.bootreps[bootfront][0] + 1
+            self.bootreps[bootfront][1] = self.bootreps[bootfront][1] + 1
+
+    def impute_threshold(self, term, tree, parents, neighbors):
+        """ Imputation via branch length.
+
+            Keyword arguments:
+            term -- Terminal node on tree to be examined.
+            tree -- Tree to be examined.
+            parents - List of parent nodes of each node in tree.
+            nc -- Minimum number of identical neighbors to impute.
+
+        """
+        for curvar in self.indata.variantset:
+            newimpute = self.detect_by_parsimony(term, tree, curvar, parents, neighbors)
+            self.imputelist.append(newimpute)
+
 
     def impute_missing(self, term, depth):
         """Imputes missing mutations.
@@ -690,59 +772,67 @@ class Imputation(object):
             curparent = nextparent
         return False
 
-    def impute_tree_pars(self, term, nc):
-        neighbours = set()
+    def detect_by_parsimony(self, term, tree, curvar, parents, nc):
+        neighbors = set()
         curnode = term
-        while len(neighbours) < nc:
-            if curnode not in phytree.treeparents:  # Will not go past the root
+
+        #Collect closest neighbors on tree
+        while len(neighbors) < nc:
+            if curnode not in parents: # will not go past the root
+                # print "not in parents"
                 break
-            theparent = phytree.treeparents[curnode]
+            curparent = parents[curnode]
+            # print "\t", curparent
             empty = []
-            allkids = phytree.collect_kids(theparent, empty, 0, depth)
+            allkids = phytree.collect_all_kids(curparent, empty)
             for kid in allkids:
                 if kid is not term:
-                    neighbours.add(kid)
-                if len(neighbours) >= nc:
-                    break
-            curnode = theparent
+                    # print "\t\t", kid
+                    neighbors.add(kid)
+                    if len(neighbors) >= nc:
+                        break
+            curnode = curparent
+        nearest = set()
+        orig = self.workseq[str(term)][int(curvar[:-1])]
+        for neighbor in neighbors:
+            nearest.add(self.workseq[str(neighbor)][int(curvar[:-1])])
 
-        for curvar in self.indata.variantset:  # ALL variants in sample
-            nearest = []
-            origseq = self.workseq[str(term)][int(curvar[:-1])]
-            nearmiss = False
-            for neighbour in neighbours:
-                nseq = self.workseq[str(neighbour)][int(curvar[:-1])]
-                if (nseq != "A" and nseq != "C" and nseq != "G" and nseq != "T"):
-                    nearmiss = True
-                nearest.append(nseq)
-            if (origseq == "N" or origseq == "." or origseq == "-") and len(nearest) > 1 and nearmiss == False:
-               if (nearest[0] == nearest[1]) and origseq != nearest[0]:
-                   newimpute = [str(term), curvar, origseq, nearest[0], "missing"]
-                   self.imputelist.append(newimpute)
-                   self.workseq[str(term)][int(curvar[:-1])] = nearest[0]
-            elif (origseq == "A" or origseq == "C" or origseq == "G" or origseq == "T") and len(nearest) > 2 and nearmiss == False:
-                if (nearest[0] == nearest[1]) and (nearest[0] == nearest[2]) and origseq != nearest[0]:
-                    curparent = theparent
-                    allneighbours = neighbours
-
-                    if self.bmchk == True:
-                        backmut = self.backmutchk(curparent, allneighbours, curvar, origseq)
+        only = nearest.pop() # Will now be a single base
+        if only in self.missing:
+            return [str(term), curvar, orig, only, "0"]
+        if len(nearest) != 1: # The nearest do not all match
+            return [str(term), curvar, orig, only, "0"]
+        if orig != only: # If target sequence does not match matching non-missing neighbors
+            if self.bmchk:
+                if self.backmutchk(curparent, neighbors, curvar, orig) == False:
+                    return [str(term), curvar, orig, only, "0"]
+            if self.brchk == True:
+                tstv = self.transversionchk(only, self.workseq[str(term)][int(curvar[:-1])], self.tstv)
+                if tstv > 0:
+                    btime = tree.distance(parents[term], term)
+                    pk = (((self.mu * btime) ** 1) * (math.exp(-self.mu * btime))) / math.factorial(1) * tstv
+                    if pk < self.threshold:
+                        return [str(term), curvar, orig, only, str(pk)]
                     else:
-                        backmut = True
-
-                    if backmut == True:
-                        tstv = self.transversionchk(nearest[0], self.workseq[str(term)][int(curvar[:-1])], self.tstv)
-                        if tstv > 0:
-                            btime = self.tree.tree.distance(theparent, term)
-                            pk = (((self.mu * btime) ** 1) * (math.exp(-self.mu * btime))) / math.factorial(1) * tstv
-                            newimpute = [str(term), curvar, origseq, nearest[0], str(pk)]
-                            self.imputelist.append(newimpute)
-                            # print "length of term branch " + str(self.tree.tree.distance(theparent, term)) + " time " + str(self.tree.tree.distance(theparent, term) / self.mu) + " tstv " + str(tstv) + " chance: " + str(pk)
-                            if pk < self.threshold:
-                                self.workseq[str(term)][int(curvar[:-1])] = nearest[0]
+                        return [str(term), curvar, orig, only, "0"]
+                else:
+                    return [str(term), curvar, orig, only, "0"]
+            else:
+                return [str(term), curvar, orig, only, "1"]
+        else:
+            return [str(term), curvar, orig, only, "0"]
 
 
     def output_imputed(self, inputfile, out, impout):
+        if verbose:
+            if len(self.imputelist) > 0:
+                print "Imputed Mutations"
+                print "ID | VAR | FROM | TO | LIKELIHOOD"
+                for imputed in self.imputelist:
+                    print " | ".join(imputed)
+                print "\n"
+            print impute.imputedseq
+
         filebase, fileext = os.path.splitext(inputfile)
         if impout == True:
             impoutfilename = filebase + "-impout.csv"
@@ -821,10 +911,10 @@ if __name__ == "__main__":
         
     parser.add_argument('-file',metavar='<file>',help='input file: .fasta, .vcf or .var', required=True)
     parser.add_argument('-ref',metavar='<ref>',help='reference sequence, .txt or .obj')
-    parser.add_argument('-tree',metavar='<tree>',help='tree type; <treefilename.xml>, pars, RAxML, PhyML', default='pars')
+    parser.add_argument('-tree',metavar='<tree>',help='tree type; <treefilename.xml>, pars, RAxML, PhyML', default='RAxML')
     parser.add_argument('-outtree', metavar='<outtree>', help='Output format for tree', default='phyloxml')
     parser.add_argument('-alpha',metavar='<alpha>',help='Value of gamma shape parameter.', default='e')
-    parser.add_argument('-boot',metavar='<boot>',help='Number of bootstrap replicates.', default='100')
+    parser.add_argument('-boot',metavar='<boot>',help='Number of bootstrap replicates.', default='10')
     parser.add_argument('-rmodel',metavar='<rmodel>',help='Model type for RaXML.', default='GTRCAT')
     parser.add_argument('-depth', metavar='<depth>', help='Depth of search toward root for collecting neeighbors.', default=2)
     parser.add_argument('-hapobj', metavar='<hapobj>', help='Haplogroups file.')
@@ -841,6 +931,11 @@ if __name__ == "__main__":
     parser.add_argument('-backmutchk', metavar='<backmutchk>', help='Only impute non-missing sites if it is a suspected back-mutation.', default=True)
     parser.add_argument('-neighbors', metavar='<neighbors>', help='Number of neighbors that must be identical in order to impute.',
                         default=3)
+    parser.add_argument('-branchchk', metavar='<branchchk>',
+                        help='<>.', default=True)
+    parser.add_argument('-starttree', metavar='<starttree>', help='Newick or phyloxml starting tree for RAxML')
+    parser.add_argument('-verbose', metavar='<verbose>', help='Verbose output.', default=True)
+
 
     args = parser.parse_args()
     inputfile = args.file
@@ -848,7 +943,7 @@ if __name__ == "__main__":
     treetype = args.tree
     outtreetype = args.outtree
     alpha = args.alpha
-    bootstrap = args.boot
+    bootstrap = int(args.boot)
     rmodel = args.rmodel
     hapobj = args.hapobj
     wtobj = args.wtobj
@@ -862,7 +957,10 @@ if __name__ == "__main__":
     impout = args.impout
     multi = args.multi
     backmutchk = args.backmutchk
-    neighbors = args.neighbors
+    neighbors = int(args.neighbors)
+    branchchk = args.branchchk
+    starttree = args.starttree
+    verbose = args.verbose
 
     sys.setrecursionlimit(10000)
 
@@ -881,20 +979,14 @@ if __name__ == "__main__":
 
     print "\n****************\nTREE\n****************\n\n"
     phytree = PhyloTree()
-    phytree.input_tree(treetype = treetype, alpha = alpha, bootstrap = bootstrap, rmodel = rmodel)
+    phytree.input_tree(treetype = treetype, alpha = alpha, bootstrap = bootstrap, rmodel = rmodel, starttreename = starttree)
     Phylo.draw_ascii(phytree.tree)
     phytree.output_tree(inputfile, outtreetype)
 
+
     print "\n****************\nIMPUTATION\n****************\n\n"
-    impute = Imputation(indata, phytree, mutrate, threshold, tstv, multi, backmutchk, neighbors)
-    impute.impute(imputetype, depth, neighbors)
-    if len(impute.imputelist)>0:
-        print "Imputed Mutations"
-        print "ID | VAR | FROM | TO | LIKELIHOOD"
-        for imputed in impute.imputelist:
-            print " | ".join(imputed)
-        print "\n"
-    print impute.imputedseq
+    impute = Imputation(indata, phytree, mutrate, threshold, tstv, multi, backmutchk, branchchk)
+    impute.impute(imputetype, depth, neighbors, bootstrap)
     impute.output_imputed(inputfile, outtype, impout)
 
 
