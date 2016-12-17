@@ -437,7 +437,7 @@ class PhyloTree(object):
             print "writing start tree"
             Phylo.write(self.starttree, "RAxML_imputorstartingtree.newick", "newick")
             raxml_args["starting_tree"] = "RAxML_imputorstartingtree.newick"
-        elif bs > 0:
+        elif bootstrap > 0:
             raxml_args["num_replicates"] = bootstrap
             raxml_args["algorithm"] = "a"
             raxml_args['rapid_bootstrap_seed'] = rng.randint(0, sys.maxint)
