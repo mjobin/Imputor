@@ -24,6 +24,7 @@ from Bio import SeqIO
 from Bio import Phylo
 from Bio.Phylo.Applications import PhymlCommandline
 from Bio.Phylo.Applications import RaxmlCommandline
+from Bio.Phylo.Consensus import bootstrap_trees
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 from Bio.Align import MultipleSeqAlignment
@@ -37,11 +38,11 @@ class InData(object):
     """
     
     def __init__(self):
-        self.ref_seq = None #Reference sequence used to construct sequence data from VCF
         self.sequence = [] #Sequence data
         self.variantset = set() #Set of locations and states of all variants from reference sequence
         self.variants = {} #Dictionary of each sample and its variation from the reference sequence
         self.filebase = None
+        self.orig_vcf_pos = [] # Original listed positions of variants
 
         # The eight mandatory columns of a VCF file. Here for clarity in functions below.
         self.vcf_chrom = 0
@@ -53,24 +54,6 @@ class InData(object):
         self.vcf_filter = 6
         self.vcf_info = 7
         
-        return
-        
-    def load_ref_seq(self, reffile = None):
-        """Load a reference sequence for the reconstruction of sequence from
-            VCF files.
-            
-            Keyword arguments:
-            reffile -- reference sequence file
-            """
-
-        if reffile[-3:] == 'obj':
-            refobj = open(reffile, 'rb')
-            self.ref_seq = pickle.load(refobj)
-        elif reffile[-3:] == 'txt':
-            ref_data = open(reffile, 'r')
-            self.ref_seq = ref_data.read().rstrip()
-        else:
-            print "ERROR! Not a known reference sequence type."
         return
 
     def load_input_data(self, inputfile = None):
@@ -86,7 +69,6 @@ class InData(object):
             self.sequence = AlignIO.read(inputfile, 'fasta')
             self.variants_from_sequence()
         elif inputfile[-3:] == 'vcf':
-            self.load_ref_seq(reffile=reffile)
             file_data = open(inputfile, 'r')
             raw_data = []
             for file_line in file_data:
@@ -101,11 +83,10 @@ class InData(object):
             # Generate variants
             for snp_line in snps_data:
                 cols = snp_line.split('\t')
-                self.variantset.add(cols[self.vcf_pos]+cols[self.vcf_alt])
+                # self.variantset.add(cols[self.vcf_pos]+cols[self.vcf_alt])
         
             # Generate sequence from only those areas with any polymorphism
-            self.seq_from_variants(raw_data)
-
+            self.seq_from_variants_excl(raw_data)
         return
 
     def vcf_expand_multi_allele(self, in_data=None):
@@ -184,6 +165,86 @@ class InData(object):
             self.variants[seq_line.name] = curdiffs
         return
 
+    def seq_from_variants_excl(self, raw_data = None):
+        print "EXCL Generating sequence..."
+        genotype_names = []
+        genotype_sequence = {}
+        bar = progressbar.ProgressBar(redirect_stdout=True)
+        for i in bar(range(len(raw_data))):
+            file_line = raw_data[i]
+            print file_line
+            cols = file_line.split('\t')
+
+            # Locate header line and read genotype names
+            if cols[self.vcf_chrom] == '#CHROM':  # Header line of VCF file
+                if cols[self.vcf_info + 1] == 'FORMAT':  # On header line, a FORMAT column next to the fixed columns?
+                    genotype_names = cols[self.vcf_info + 2:]  # If so, remaining columns are the genotypes
+                else:
+                    print "Error. VCF file with no genotype. Cannot create sequence data."
+                    return
+
+        for genotype_name in genotype_names: # Step through data lines, constructing list of variants
+            self.variants[genotype_name] = []
+
+
+        snps_data = self.vcf_snp_prune(raw_data) #Ensure only SNPs are being processed
+        var_count = 0
+        for file_line in snps_data:
+            cols = file_line.split('\t')
+            self.orig_vcf_pos.append(cols[self.vcf_pos])
+            self.variantset.add(str(var_count) + cols[self.vcf_alt])
+            if (file_line[:1] == "#") or (cols[self.vcf_chrom] == '\n' or cols[self.vcf_info+1][:2] != "GT"):
+                continue
+            indiv_genotypes = cols[self.vcf_info+2:] # Assumes all rows same length, as per VCF standard
+            for position, indiv_genotype in enumerate(
+                    indiv_genotypes):  # Iterates through that row of genotypes for this site
+                assigned_alleles = indiv_genotype.split(
+                    "[/|]+")  # Split genotype entry on either character phased or unphased
+                changed_genotype_names = []
+                for allele_pos, assigned_allele in enumerate(assigned_alleles):  # Iterates through the alleles
+                    changed_genotype_name = genotype_names[position]
+                    if len(assigned_alleles) > 1:  # Only append to genotype name if not haploid
+                        changed_genotype_name = changed_genotype_name + str(allele_pos)
+                    changed_genotype_names.append(changed_genotype_name)
+                for changed_genotype_name in changed_genotype_names:
+                    if changed_genotype_name not in genotype_sequence:
+                        genotype_sequence[changed_genotype_name] = []
+
+                alt_alleles = cols[self.vcf_alt].split(",")  # List of ALT alleles for this row
+                for allele_pos, assigned_allele in enumerate(assigned_alleles):  # Iterates through the alleles
+                    if assigned_allele == "0":  # Assigned_allele will be 0 for REF and >0 for any ALT
+                        genotype_sequence[changed_genotype_names[allele_pos]].append(cols[self.vcf_ref])
+                    elif assigned_allele == ".":  # VCF format code for missing allele
+                        genotype_sequence[changed_genotype_names[allele_pos]].append("N")
+                    else:
+                        genotype_sequence[changed_genotype_names[allele_pos]].append(alt_alleles[int(assigned_allele)-1])
+                        if changed_genotype_names[allele_pos] in self.variants:  # Keys added to self.variants here
+                            self.variants[changed_genotype_names[allele_pos]].append(  # to avoid empty entries
+                                str(var_count) + alt_alleles[int(assigned_allele) - 1])
+                        else:
+                            self.variants[changed_genotype_names[allele_pos]] = []
+                            self.variants[changed_genotype_names[allele_pos]].append(
+                                str(var_count) + alt_alleles[int(assigned_allele) - 1])
+            var_count = var_count + 1
+
+
+        for geno in genotype_sequence.keys():
+            genotype_sequence[geno] = ''.join(genotype_sequence[geno])
+
+        # Write to a FASTA file so that it can be read in as SeqIO
+        outfile = open('vcf_seq_temp.fasta', 'w')
+        lenchk = -1
+        for geno in genotype_sequence.keys():
+            outfile.write(">")
+            outfile.write(geno)
+            outfile.write("\n")
+            outfile.write(genotype_sequence[geno])
+            if (lenchk >= 0 and lenchk != len(genotype_sequence[geno])):
+                print "mismatch" + lenchk + " " + len(genotype_sequence[geno])
+            outfile.write("\n")
+        outfile.close()
+        self.sequence = AlignIO.read('vcf_seq_temp.fasta', 'fasta')
+
     def seq_from_variants(self, raw_data = None):
         """ Generates sequence data from the variants derived from a VCF file.
             Sequence generated includes only polymorphic sites for the sake of brevity.
@@ -192,6 +253,8 @@ class InData(object):
             raw_data-- VCF file data.
         """
         print "Generating sequence..."
+        genotype_names = []
+        genotype_sequence = {}
         bar = progressbar.ProgressBar(redirect_stdout=True)
         for i in bar(range(len(raw_data))):
             file_line = raw_data[i]
@@ -202,7 +265,6 @@ class InData(object):
             if cols[self.vcf_chrom]=='#CHROM':  # Header line of VCF file
                 if cols[self.vcf_info+1]=='FORMAT':  # On header line, a FORMAT column next to the fixed columns?
                     genotype_names = cols[self.vcf_info+2:] # If so, remaining columns are the genotypes
-                    genotype_sequence = {}  # Dictionary, thus unique keys
                     ref_seq_list =[] # The reference sequence is converted to a list so individual sites can be altered
                     for ref_seq_char in self.ref_seq:
                         ref_seq_list.append(ref_seq_char)
@@ -402,6 +464,8 @@ class PhyloTree(object):
         searcher = NNITreeSearcher(scorer)
         constructor = ParsimonyTreeConstructor(searcher)
         self.tree = constructor.build_tree(indata.sequence)
+        self.btrees = Phylo.Consensus.bootstrap_trees(indata.sequence, bootstrap, constructor)
+
 
     def raxml_tree(self, rmodel=None, bootstrap=None):
         """ Constructs a tree via maximum likelihood by invoking external software RAxML.
@@ -646,51 +710,6 @@ class Imputation(object):
                    if len(allkids) > 2 and float(present) / float(len(allkids)) > 0.5:
                         self.workseq[str(term)][int(curvar[:-1])] = curvar[-1:]
 
-    def impute_by_reference(self, term):
-        """Imputes missing mutations.
-
-            Keyword arguments:
-            term -- Terminal node to be compared to neighbours.
-
-        """
-        # print "\n******\n For term: " + str(term)
-        for curvar in self.indata.variantset:  # ALL variants in sample
-            origseq = self.workseq[str(term)][int(curvar[:-1])]
-            # print "\nFor variant: " + str(curvar) + " : " + origseq
-            nearest = set()
-            curnode = term
-            while len(nearest) < 2:
-                if curnode in phytree.treeparents:  # Will not go past the root clade, which has no parent
-                    theparent = phytree.treeparents[curnode]  # Should be an internal clade with no associated sample
-                    empty = []
-                    # print "curnode: " + str(curnode) + " parent: " + str(theparent)
-                    allkids = phytree.collect_kids(theparent, empty, 0, depth)
-                    for kid in allkids:
-                        if kid != term:
-                            nearest.add(kid)
-                else:
-                    break
-                curnode = theparent
-
-            nearseq = []
-
-            for kid in nearest:
-                # print kid
-                kidseq = self.workseq[str(kid)][int(curvar[:-1])]
-                nearseq.append(kidseq)
-
-            # print "target: " + origseq + " neighbors: " + str(nearseq)
-            if (origseq == "N" or origseq == "." or origseq == "-") and len(nearseq) >= 2:
-                if (nearseq[0] == nearseq[1]):
-                    # print "\n******IMPUTE? For term: " + str(term) + " For variant: " + str(curvar) + " : " + origseq
-                    # print "orig:" + str(origseq) + " ref: " + refseq + " nearseq: " + str(nearseq)
-                    self.workseq[str(term)][int(curvar[:-1])] = nearseq[0]
-            elif (origseq == "A" or origseq == "C" or origseq == "G" or origseq == "T") and len(nearseq) >= 2:
-                refseq = indata.ref_seq[int(curvar[:-1])]
-                # print "IMPUTE? orig:" + str(origseq) + " ref: " + refseq + " nearseq: " + str(nearseq)
-                if (nearseq[0] == nearseq[1]) and (origseq != nearseq[0]) and (origseq == refseq):
-                    self.workseq[str(term)][int(curvar[:-1])] = nearseq[0]
-                    # print "IMPUTE? orig:" + str(origseq) + " ref: " + refseq + " nearseq: " + str(nearseq)
 
     def impute_by_parsimony(self, term, terms):
         # print "\n*****" + str(term)
@@ -910,7 +929,6 @@ if __name__ == "__main__":
                                      "- ",formatter_class=RawTextHelpFormatter)
         
     parser.add_argument('-file',metavar='<file>',help='input file: .fasta, .vcf or .var', required=True)
-    parser.add_argument('-ref',metavar='<ref>',help='reference sequence, .txt or .obj')
     parser.add_argument('-tree',metavar='<tree>',help='tree type; <treefilename.xml>, pars, RAxML, PhyML', default='RAxML')
     parser.add_argument('-outtree', metavar='<outtree>', help='Output format for tree', default='phyloxml')
     parser.add_argument('-alpha',metavar='<alpha>',help='Value of gamma shape parameter.', default='e')
@@ -939,7 +957,6 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     inputfile = args.file
-    reffile = args.ref
     treetype = args.tree
     outtreetype = args.outtree
     alpha = args.alpha
@@ -967,7 +984,6 @@ if __name__ == "__main__":
     print "Working in" + os.getcwd() + " on " + inputfile +  " using " + treetype
 
     indata = InData()
-
 
     indata.load_input_data(inputfile = inputfile)
     print "\n****************\nVARIANTS\n****************\n\n"
