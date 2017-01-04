@@ -38,6 +38,9 @@ class InData(object):
     """
     
     def __init__(self):
+        self.fullsequence = [] # Raw sequence input including non-segregating sites
+        self.fullvariantset = set()
+        self.fullvariants = {}
         self.sequence = [] #Sequence data
         self.variantset = set() #Set of locations and states of all variants from reference sequence
         self.variants = {} #Dictionary of each sample and its variation from the reference sequence
@@ -68,6 +71,7 @@ class InData(object):
         if inputfile[-5:] == 'fasta':
             self.sequence = AlignIO.read(inputfile, 'fasta')
             self.variants_from_sequence()
+            self.prune_non_seg()
         elif inputfile[-3:] == 'vcf':
             file_data = open(inputfile, 'r')
             raw_data = []
@@ -165,14 +169,56 @@ class InData(object):
             self.variants[seq_line.name] = curdiffs
         return
 
+    def prune_non_seg(self):
+        """ Strips out non-segregating sites from a sequence alignment.
+            Uses self.variantset, which must be filled first.
+        """
+        self.fullsequence = self.sequence # First back up the original sequence
+        self.fullvariantset = self.variantset
+        self.fullvariants = self.variants
+
+        self.sequence = MultipleSeqAlignment([]) # Blank the sequence to be worked on
+
+        print "Pruning non-segregating sites..."
+
+        locs = []
+        for curvar in self.variantset:
+            locs.append(int(curvar[:-1]))
+        locs.sort()
+
+        stripped = {}
+        seqnames = []
+        for seq in self.fullsequence:
+            stripped[seq.name] = []
+            seqnames.append(seq.name)
+
+
+        for loc in locs:
+            # print (self.fullsequence[:, loc])
+            seqbits = self.fullsequence[:, loc]
+            name = 0
+            for seqbit in seqbits:
+                stripped[seqnames[name]].append(seqbit)
+                name = name + 1
+
+        for strip in stripped.keys():
+            self.sequence.append(SeqRecord(Seq(''.join(stripped[strip])), name=strip, id=strip))
+
+        self.variantset = set()
+        self.variants = {}
+        self.variants_from_sequence() #Re-run on stripped sequence
+
+
+
+
+
     def seq_from_variants_excl(self, raw_data = None):
-        print "EXCL Generating sequence..."
+        print "Generating sequence..."
         genotype_names = []
         genotype_sequence = {}
         bar = progressbar.ProgressBar(redirect_stdout=True)
         for i in bar(range(len(raw_data))):
             file_line = raw_data[i]
-            print file_line
             cols = file_line.split('\t')
 
             # Locate header line and read genotype names
@@ -244,6 +290,9 @@ class InData(object):
             outfile.write("\n")
         outfile.close()
         self.sequence = AlignIO.read('vcf_seq_temp.fasta', 'fasta')
+        self.fullsequence = self.sequence # For completeness... backup same as original
+        self.fullvariantset = self.variantset
+        self.fullvariants = self.variants
 
     def seq_from_variants(self, raw_data = None):
         """ Generates sequence data from the variants derived from a VCF file.
@@ -862,8 +911,10 @@ class Imputation(object):
                 impoutfile.write(",".join(imputed))
                 impoutfile.write("\n")
         if out == "vcf":
-            print "VCF output not yet implemented."
-            return
+            outseqfile = filebase + "-seqout.vcf"
+            outfile = open(outseqfile, 'w')
+            outfile.write("##fileformat=VCFv4.1")
+            outfile.write("#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	")
         else: # default to fasta
             outseqfile = filebase + "-seqout.fasta"
             outfile = open(outseqfile, 'w')
