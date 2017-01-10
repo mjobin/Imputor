@@ -176,11 +176,9 @@ class InData(object):
         self.fullsequence = self.sequence # First back up the original sequence
         self.fullvariantset = self.variantset
         self.fullvariants = self.variants
-
         self.sequence = MultipleSeqAlignment([]) # Blank the sequence to be worked on
 
         print "Pruning non-segregating sites..."
-
         locs = []
         for curvar in self.variantset:
             locs.append(int(curvar[:-1]))
@@ -207,9 +205,6 @@ class InData(object):
         self.variantset = set()
         self.variants = {}
         self.variants_from_sequence() #Re-run on stripped sequence
-
-
-
 
 
     def seq_from_variants_excl(self, raw_data = None):
@@ -290,7 +285,7 @@ class InData(object):
             outfile.write("\n")
         outfile.close()
         self.sequence = AlignIO.read('vcf_seq_temp.fasta', 'fasta')
-        self.fullsequence = self.sequence # For completeness... backup same as original
+        self.fullsequence = self.sequence
         self.fullvariantset = self.variantset
         self.fullvariants = self.variants
 
@@ -657,8 +652,6 @@ class Imputation(object):
                     impute_threads.append(t)
                 for thread in impute_threads:  # Block until all complete
                     thread.join()
-
-
             for bootrep in self.bootreps:
                 if(self.bootreps[bootrep][0]/self.bootreps[bootrep][1] > (1-self.threshold)):
                     newimpute = bootrep.split("-")
@@ -678,11 +671,11 @@ class Imputation(object):
             for thread in impute_threads:  # Block until all complete
                 thread.join()
             for newimpute in self.imputelist:
-                if float(newimpute[4]) < self.threshold:
+                if float(newimpute[4]) > self.threshold:
+                    old = self.workseq[newimpute[0]][int(newimpute[1][:-1])]
                     self.workseq[newimpute[0]][int(newimpute[1][:-1])] = newimpute[3]
-
+                    # print newimpute[0], " " ,newimpute[1][:-1], " " ,old, " -> ",self.workseq[newimpute[0]][int(newimpute[1][:-1])]
         self.process_imputed()
-
 
     def impute_bootstrap(self, term, btree, bparents, neighbors):
         """ Imputation with bootstrap replicates.
@@ -718,7 +711,6 @@ class Imputation(object):
         for curvar in self.indata.variantset:
             newimpute = self.detect_by_parsimony(term, tree, curvar, parents, neighbors)
             self.imputelist.append(newimpute)
-
 
     def impute_missing(self, term, depth):
         """Imputes missing mutations.
@@ -759,7 +751,6 @@ class Imputation(object):
                    if len(allkids) > 2 and float(present) / float(len(allkids)) > 0.5:
                         self.workseq[str(term)][int(curvar[:-1])] = curvar[-1:]
 
-
     def impute_by_parsimony(self, term, terms):
         # print "\n*****" + str(term)
         dists = {}
@@ -792,8 +783,8 @@ class Imputation(object):
                         if nearest[outgrp] == origseq:
                             # print str(term) + " Reversion? " + str(curvar) + " " + str(origseq) + ": " +str(nearest)
                             theparent = self.tree.treeparents[term]
-                            tstv = self.transversionchk(nearest[0], self.workseq[str(term)][int(curvar[:-1])],  self.tstv)
-                            if tstv > 0:
+                            tstvchk = self.transversionchk(nearest[0], self.workseq[str(term)][int(curvar[:-1])],  self.tstv)
+                            if tstvchk > 0:
                                 btime = self.tree.tree.distance(theparent, term)
                                 pk = (((self.mu * btime) ** 1) * (math.exp(-self.mu * btime)))/ math.factorial(1) * tstv
                                 # print "length of term branch " + str(self.tree.tree.distance(theparent, term)) + " time " + str(self.tree.tree.distance(theparent, term) / self.mu) + " tstv " + str(tstv) + " chance: " + str(pk)
@@ -801,9 +792,26 @@ class Imputation(object):
                                     self.workseq[str(term)][int(curvar[:-1])] = nearest[0]
 
     def process_imputed(self):
-        for key, value in self.workseq.iteritems():
-            seqrec = SeqRecord(Seq("".join(value)), id=key, name=key)
+        print "Processing immputed sequences..."
+        locs = []
+        for curvar in indata.fullvariantset:
+            locs.append(int(curvar[:-1]))
+        locs.sort()
+
+        bar = progressbar.ProgressBar()
+        for p in bar(range(len(indata.fullsequence))):
+            fullseq = indata.fullsequence[p]
+        # for fullseq in indata.fullsequence:
+            tmpseq = list(fullseq)
+            segseq = self.workseq[fullseq.id]
+
+            if len(segseq) == len (locs):
+                for site, loc in itertools.izip(segseq, locs):
+                    tmpseq[loc] = site
+
+            seqrec = SeqRecord(Seq("".join(tmpseq)), id=fullseq.id, name=fullseq.id)
             self.imputedseq.append(seqrec)
+
         self.imputedseq.sort()
 
     def transversionchk(self, a, b, tstv):
@@ -871,25 +879,21 @@ class Imputation(object):
         if len(nearest) != 1: # The nearest do not all match
             return [str(term), curvar, orig, only, "0"]
         if orig != only: # If target sequence does not match matching non-missing neighbors
-            if self.bmchk:
+            if self.bmchk == True:
                 if self.backmutchk(curparent, neighbors, curvar, orig) == False:
                     return [str(term), curvar, orig, only, "0"]
             if self.brchk == True:
-                tstv = self.transversionchk(only, self.workseq[str(term)][int(curvar[:-1])], self.tstv)
-                if tstv > 0:
+                tstvchk = self.transversionchk(only, self.workseq[str(term)][int(curvar[:-1])], self.tstv)
+                if tstvchk > 0:
                     btime = tree.distance(parents[term], term)
                     pk = (((self.mu * btime) ** 1) * (math.exp(-self.mu * btime))) / math.factorial(1) * tstv
-                    if pk < self.threshold:
-                        return [str(term), curvar, orig, only, str(pk)]
-                    else:
-                        return [str(term), curvar, orig, only, "0"]
+                    return [str(term), curvar, orig, only, str(pk)]
                 else:
                     return [str(term), curvar, orig, only, "0"]
             else:
                 return [str(term), curvar, orig, only, "1"]
         else:
             return [str(term), curvar, orig, only, "0"]
-
 
     def output_imputed(self, inputfile, out, impout):
         if verbose:
