@@ -46,6 +46,7 @@ class InData(object):
         self.variants = {} #Dictionary of each sample and its variation from the reference sequence
         self.filebase = None
         self.orig_vcf_pos = [] # Original listed positions of variants
+        self.geninfo = {} # Dict of list of dicts
 
         # The eight mandatory columns of a VCF file. Here for clarity in functions below.
         self.vcf_chrom = 0
@@ -129,7 +130,7 @@ class InData(object):
         """
         snps_data = []
         print "Pruning non-SNP entries..."
-        bar = progressbar.ProgressBar(redirect_stdout=True)
+        bar = progressbar.ProgressBar()
         for i in bar(range(len(in_data))):
             file_line = in_data[i]
 
@@ -154,7 +155,7 @@ class InData(object):
         print "Generating variants from sequence..."
 
         firstseq = self.sequence[0]
-        bar = progressbar.ProgressBar(redirect_stdout=True)
+        bar = progressbar.ProgressBar()
         for i in bar(range(len(self.sequence))):
             seq_line = self.sequence[i]
             if len(seq_line) != len(firstseq):
@@ -206,12 +207,11 @@ class InData(object):
         self.variants = {}
         self.variants_from_sequence() #Re-run on stripped sequence
 
-
     def seq_from_variants_excl(self, raw_data = None):
         print "Generating sequence..."
         genotype_names = []
         genotype_sequence = {}
-        bar = progressbar.ProgressBar(redirect_stdout=True)
+        bar = progressbar.ProgressBar()
         for i in bar(range(len(raw_data))):
             file_line = raw_data[i]
             cols = file_line.split('\t')
@@ -226,6 +226,7 @@ class InData(object):
 
         for genotype_name in genotype_names: # Step through data lines, constructing list of variants
             self.variants[genotype_name] = []
+            self.geninfo[genotype_name] = []
 
 
         snps_data = self.vcf_snp_prune(raw_data) #Ensure only SNPs are being processed
@@ -236,10 +237,13 @@ class InData(object):
             self.variantset.add(str(var_count) + cols[self.vcf_alt])
             if (file_line[:1] == "#") or (cols[self.vcf_chrom] == '\n' or cols[self.vcf_info+1][:2] != "GT"):
                 continue
+            formatcols =  cols[self.vcf_info+1].split(":")
+
             indiv_genotypes = cols[self.vcf_info+2:] # Assumes all rows same length, as per VCF standard
             for position, indiv_genotype in enumerate(
                     indiv_genotypes):  # Iterates through that row of genotypes for this site
-                assigned_alleles = indiv_genotype.split(
+                genotypecols = indiv_genotype.split(":")
+                assigned_alleles = genotypecols[0].split(  # VCF standard GT always first column
                     "[/|]+")  # Split genotype entry on either character phased or unphased
                 changed_genotype_names = []
                 for allele_pos, assigned_allele in enumerate(assigned_alleles):  # Iterates through the alleles
@@ -266,120 +270,26 @@ class InData(object):
                             self.variants[changed_genotype_names[allele_pos]] = []
                             self.variants[changed_genotype_names[allele_pos]].append(
                                 str(var_count) + alt_alleles[int(assigned_allele) - 1])
+
+                #Now dictionary of all genotype info
+                genodict = {}
+                for fi in range(len(formatcols)):
+                    if fi < len(genotypecols):
+                        genodict[formatcols[fi]] = genotypecols[fi]
+                for changed_genotype_name in changed_genotype_names:
+                    self.geninfo[changed_genotype_name].append(genodict)
             var_count = var_count + 1
-
-
+        # print self.geninfo
         for geno in genotype_sequence.keys():
             genotype_sequence[geno] = ''.join(genotype_sequence[geno])
 
-        # Write to a FASTA file so that it can be read in as SeqIO
-        outfile = open('vcf_seq_temp.fasta', 'w')
-        lenchk = -1
+        self.sequence = MultipleSeqAlignment([])  # Blank the sequence to be worked on
         for geno in genotype_sequence.keys():
-            outfile.write(">")
-            outfile.write(geno)
-            outfile.write("\n")
-            outfile.write(genotype_sequence[geno])
-            if (lenchk >= 0 and lenchk != len(genotype_sequence[geno])):
-                print "mismatch" + lenchk + " " + len(genotype_sequence[geno])
-            outfile.write("\n")
-        outfile.close()
-        self.sequence = AlignIO.read('vcf_seq_temp.fasta', 'fasta')
+            self.sequence.append(SeqRecord(Seq(''.join(genotype_sequence[geno])), name=geno, id=geno))
+
         self.fullsequence = self.sequence
         self.fullvariantset = self.variantset
         self.fullvariants = self.variants
-
-    def seq_from_variants(self, raw_data = None):
-        """ Generates sequence data from the variants derived from a VCF file.
-            Sequence generated includes only polymorphic sites for the sake of brevity.
-            
-            Keyword arguments:
-            raw_data-- VCF file data.
-        """
-        print "Generating sequence..."
-        genotype_names = []
-        genotype_sequence = {}
-        bar = progressbar.ProgressBar(redirect_stdout=True)
-        for i in bar(range(len(raw_data))):
-            file_line = raw_data[i]
-        # for file_line in raw_data:
-            cols = file_line.split('\t')
-                
-            # Locate header line and read genotype names
-            if cols[self.vcf_chrom]=='#CHROM':  # Header line of VCF file
-                if cols[self.vcf_info+1]=='FORMAT':  # On header line, a FORMAT column next to the fixed columns?
-                    genotype_names = cols[self.vcf_info+2:] # If so, remaining columns are the genotypes
-                    ref_seq_list =[] # The reference sequence is converted to a list so individual sites can be altered
-                    for ref_seq_char in self.ref_seq:
-                        ref_seq_list.append(ref_seq_char)
-                else:
-                    print "Error. VCF file with no genotype. Cannot create sequence data."
-                    return
-
-        # Step through data lines, constructing list of variants. Add an empty list for every genotype.
-        for genotype_name in genotype_names:
-            self.variants[genotype_name] = []
-
-        # Step through data lines, reconstructing the sequence of each individual
-        snps_data = self.vcf_snp_prune(raw_data) #Ensure only SNPs are being processed
-        for file_line in snps_data:
-            cols = file_line.split('\t')
-            if (file_line[:1] == "#") or (cols[self.vcf_chrom] == '\n' or cols[self.vcf_info+1][:2] != "GT"): #If the second character is a (meta-info line) or a blank line or if GT does not start the format line, ignore
-                continue
-            indiv_genotypes = cols[self.vcf_info+2:] # Assumes all rows same length, as per VCF standard
-            for position, indiv_genotype in enumerate(indiv_genotypes): # Iterates through that row of genotypes for this site
-                assigned_alleles = indiv_genotype.split("[/|]+") # Split genotype entry on either character phased or unphased
-                changed_genotype_names = []
-                for allele_pos, assigned_allele in enumerate(assigned_alleles): # Iterates through the alleles
-                    changed_genotype_name = genotype_names[position]
-                    if len(assigned_alleles)>1: # Only append to genotype name if not haploid
-                        changed_genotype_name = changed_genotype_name + str(allele_pos)
-                    changed_genotype_names.append(changed_genotype_name)
-                for changed_genotype_name in changed_genotype_names:
-                    if changed_genotype_name in genotype_sequence:
-                        pass
-                    else:
-                        # genotype_sequence[changed_genotype_name] = [] # Each genotype begins with the reference sequence placed in all valueus
-                        genotype_sequence[changed_genotype_name] = ref_seq_list
-
-                            
-            
-                alt_alleles  = cols[self.vcf_alt].split(",") #List of ALT alleles for this row
-                # print alt_alleles
-                for allele_pos, assigned_allele in enumerate(assigned_alleles): #Iterates through the alleles
-                    if assigned_allele == "0": #Assigned_allele will be 0 for REF and >0 for any ALT
-                        # genotype_sequence[changed_genotype_names[allele_pos]].append(cols[self.vcf_ref])
-                        pass
-                    elif assigned_allele == ".": #VCF format code for missing allele
-                        # genotype_sequence[changed_genotype_names[allele_pos]].append("N")
-                        genotype_sequence[changed_genotype_names[allele_pos]][int(cols[self.vcf_pos])] = "N"
-                    else:
-                        # genotype_sequence[changed_genotype_names[allele_pos]].append(alt_alleles[int(assigned_allele)-1])
-                        genotype_sequence[changed_genotype_names[allele_pos]][int(cols[self.vcf_pos])] = alt_alleles[int(assigned_allele)-1]
-                        if changed_genotype_names[allele_pos] in self.variants: #Keys added to self.variants here
-                            self.variants[changed_genotype_names[allele_pos]].append( #to avoid empty entries
-                                cols[self.vcf_pos]+alt_alleles[int(assigned_allele) - 1])
-                        else:
-                            self.variants[changed_genotype_names[allele_pos]] = []
-                            self.variants[changed_genotype_names[allele_pos]].append(
-                                cols[self.vcf_pos]+alt_alleles[int(assigned_allele) - 1])
-
-        for geno in genotype_sequence.keys():
-            genotype_sequence[geno] = ''.join(genotype_sequence[geno])
-
-        # Write to a FASTA file so that it can be read in as SeqIO
-        outfile = open('vcf_seq_temp.fasta', 'w')
-        lenchk = -1
-        for geno in genotype_sequence.keys():
-            outfile.write(">")
-            outfile.write(geno)
-            outfile.write("\n")
-            outfile.write(genotype_sequence[geno])
-            if (lenchk >= 0 and lenchk != len(genotype_sequence[geno])):
-                print "mismatch" + lenchk + " " + len(genotype_sequence[geno])
-            outfile.write("\n")
-        outfile.close()
-        self.sequence = AlignIO.read('vcf_seq_temp.fasta', 'fasta')
 
 
 class PhyloTree(object):
@@ -605,7 +515,7 @@ class Imputation(object):
     """Imputation of missing mutations given input data and a phylogenetic tree.
     """
 
-    def __init__(self, indata, phytree, mutrate, threshold, tstv, multi, bmchk, brchk):
+    def __init__(self, indata, phytree, mutrate, threshold, tstv, multi, bmchk, brchk, genoqual):
         self.cpucount = multiprocessing.cpu_count()
         self.workseq = {}
         self.imputedseq = MultipleSeqAlignment([])
@@ -640,7 +550,7 @@ class Imputation(object):
         impute_threads =[]
 
         if bootstrap > 0: # Bootstrap replicates
-            self.brchk = False # No need to check branch lengths when comparing bootstrap
+            self.brchk = False # No checking branch lengths when comparing bootstrap reps
             bpar = iter(phytree.btreeparents)
             for btree in self.phytree.btrees:
                 terms = btree.get_terminals()
@@ -879,9 +789,13 @@ class Imputation(object):
         if len(nearest) != 1: # The nearest do not all match
             return [str(term), curvar, orig, only, "0"]
         if orig != only: # If target sequence does not match matching non-missing neighbors
-            if self.bmchk == True:
+            if self.bmchk == True: #  Do not impute if checking for and failing to find N matching neighbours
                 if self.backmutchk(curparent, neighbors, curvar, orig) == False:
                     return [str(term), curvar, orig, only, "0"]
+            if "GQ" in indata.geninfo[str(term)][int(curvar[:-1])]:
+                if indata.geninfo[str(term)][int(curvar[:-1])]["GQ"] < genoqual:
+                    # print "GQ: ", indata.geninfo[str(term)][int(curvar[:-1])]["GQ"]
+                    return [str(term), curvar, orig, only, "1"]
             if self.brchk == True:
                 tstvchk = self.transversionchk(only, self.workseq[str(term)][int(curvar[:-1])], self.tstv)
                 if tstvchk > 0:
@@ -901,7 +815,8 @@ class Imputation(object):
                 print "Imputed Mutations"
                 print "ID | VAR | FROM | TO | LIKELIHOOD"
                 for imputed in self.imputelist:
-                    print " | ".join(imputed)
+                    if float(imputed[4]) > 0.0:
+                        print " | ".join(imputed)
                 print "\n"
             print impute.imputedseq
 
@@ -1008,6 +923,7 @@ if __name__ == "__main__":
                         help='<>.', default=True)
     parser.add_argument('-starttree', metavar='<starttree>', help='Newick or phyloxml starting tree for RAxML')
     parser.add_argument('-verbose', metavar='<verbose>', help='Verbose output.', default=True)
+    parser.add_argument('-genoqual', metavar='<genoqual>', help='Genotype Quality threshold for VCF input.', default=30)
 
 
     args = parser.parse_args()
@@ -1033,6 +949,7 @@ if __name__ == "__main__":
     branchchk = args.branchchk
     starttree = args.starttree
     verbose = args.verbose
+    genoqual = args.genoqual
 
     sys.setrecursionlimit(10000)
 
@@ -1056,7 +973,7 @@ if __name__ == "__main__":
 
 
     print "\n****************\nIMPUTATION\n****************\n\n"
-    impute = Imputation(indata, phytree, mutrate, threshold, tstv, multi, backmutchk, branchchk)
+    impute = Imputation(indata, phytree, mutrate, threshold, tstv, multi, backmutchk, branchchk, genoqual)
     impute.impute(imputetype, depth, neighbors, bootstrap)
     impute.output_imputed(inputfile, outtype, impout)
 
