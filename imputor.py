@@ -11,6 +11,7 @@ import os
 import sys
 import random
 import glob
+import time
 import math
 import argparse
 from argparse import RawTextHelpFormatter
@@ -168,6 +169,11 @@ class InData(object):
                 self.variantset.add(str(diff_pos)+seq_line[diff_pos])
                 curdiffs.append(str(diff_pos) + seq_line[diff_pos])
             self.variants[seq_line.name] = curdiffs
+            self.geninfo[seq_line.name] = []
+            for i in xrange(len(seq_line)):
+                genodict = {}
+                self.geninfo[seq_line.name].append(genodict)
+
         return
 
     def prune_non_seg(self):
@@ -279,7 +285,6 @@ class InData(object):
                 for changed_genotype_name in changed_genotype_names:
                     self.geninfo[changed_genotype_name].append(genodict)
             var_count = var_count + 1
-        # print self.geninfo
         for geno in genotype_sequence.keys():
             genotype_sequence[geno] = ''.join(genotype_sequence[geno])
 
@@ -304,7 +309,7 @@ class PhyloTree(object):
         self.starttree = None # Phylogenetic tree used as starting tree in RAxML
 
 
-    def input_tree(self, treetype=None, alpha=None, bootstrap=None, rmodel=None, starttreename=None):
+    def input_tree(self, treetype=None, alpha=None, bootstrap=None, rmodel=None, starttreename=None, timestamp=None):
         """ Takes input tree file or sequence data.
 
             Keyword arguments:
@@ -313,6 +318,7 @@ class PhyloTree(object):
 
         self.treetype = treetype
         self.starttreename = starttreename
+        self.impname = "imp" + str(timestamp)
 
         if self.starttreename:
             if bootstrap > 0:
@@ -420,7 +426,6 @@ class PhyloTree(object):
         self.tree = constructor.build_tree(indata.sequence)
         self.btrees = Phylo.Consensus.bootstrap_trees(indata.sequence, bootstrap, constructor)
 
-
     def raxml_tree(self, rmodel=None, bootstrap=None):
         """ Constructs a tree via maximum likelihood by invoking external software RAxML.
             See docs for RAxML installation and setup.
@@ -437,29 +442,25 @@ class PhyloTree(object):
             os.remove(delfile)
 
         # Output sequence to a temp FASTA file
-        tempfastafile = indata.filebase + "_fastatmp.fasta"
+        tempfastafile = indata.filebase + self.impname + "_fastatmp.fasta"
         AlignIO.write(indata.sequence, tempfastafile, "fasta")
         rng = random.SystemRandom()  # Uses /dev/urandom
-
 
         raxml_args = {}
         raxml_args["sequences"] = tempfastafile
         raxml_args["model"] = rmodel
-        raxml_args["name"] = "imputor"
+        raxml_args["name"] = self.impname
         raxml_args["parsimony_seed"] = rng.randint(0, sys.maxint)
         raxml_args["threads"] = cpus
 
-
-
+        raxmlstarttreename = "RAxML_" + self.impname + "_starttree.newick"
         if self.starttree:
-            print "writing start tree"
-            Phylo.write(self.starttree, "RAxML_imputorstartingtree.newick", "newick")
-            raxml_args["starting_tree"] = "RAxML_imputorstartingtree.newick"
+            Phylo.write(self.starttree, raxmlstarttreename, "newick")
+            raxml_args["starting_tree"] = raxmlstarttreename
         elif bootstrap > 0:
             raxml_args["num_replicates"] = bootstrap
             raxml_args["algorithm"] = "a"
             raxml_args['rapid_bootstrap_seed'] = rng.randint(0, sys.maxint)
-
 
         raxml_cline = RaxmlCommandline(**raxml_args)
 
@@ -467,15 +468,18 @@ class PhyloTree(object):
         if verbose:
             print err_log
             print out_log
-        self.tree = Phylo.read("RAxML_bestTree.imputor", "newick")
+        raxmlbesttreename = "RAxML_bestTree." + self.impname
+        self.tree = Phylo.read(raxmlbesttreename, "newick")
         if bootstrap>0:
-            self.btrees = list(Phylo.parse("RAxML_bootstrap.imputor", "newick"))
+            raxmlbsname = "RAxML_bootstrap." + self.impname
+            self.btrees = list(Phylo.parse(raxmlbsname, "newick"))
 
         # Erase RaXML intermediate files
         if not verbose:
             raxml_glob = glob.glob('RAxML_*')
             for delfile in raxml_glob:
                 os.remove(delfile)
+        os.remove(tempfastafile)
 
     def phyml_tree(self, alpha=None, boostrap=None):
         """ Constructs a tree via maximum likelihood by invoking external software PhyML.
@@ -484,17 +488,18 @@ class PhyloTree(object):
         """
         print "Invoking PhyML..."
         # Output sequence to a temp FASTA file
-        tempfastafile = indata.filebase + "_fastatmp.fasta"
+        tempfastafile = indata.filebase + "_" + self.impname + "_fastatmp.fasta"
         AlignIO.write(indata.sequence, tempfastafile, "fasta")
-        tempphyfile = indata.filebase + "_phytmp.phy"
+        tempphyfile = indata.filebase + "_" + self.impname + "_phytmp.phy"
         AlignIO.convert(tempfastafile, "fasta", tempphyfile, "phylip-relaxed")
 
         phyml_args = {}
         phyml_args["input"] = tempphyfile
         phyml_args["alpha"] = "e"
+        phystarttreename = "PhyML_imp" , self.impname ,"starttree.newick"
         if self.starttree:
-            Phylo.write(self.starttree, "PhyML_imputorstartingtree.newick", "newick")
-            phyml_args["input_tree"] = "PhyML_imputorstartingtree.newick"
+            Phylo.write(self.starttree, phystarttreename, "newick")
+            phyml_args["input_tree"] = phystarttreename
         elif bootstrap > 0:
             phyml_args["bootstrap"] = bootstrap
 
@@ -509,6 +514,11 @@ class PhyloTree(object):
         if bootstrap > 0:
             phybtreefile = tempphyfile + "_phyml_boot_trees.txt"
             self.btrees = Phylo.parse(phybtreefile, "newick")
+        if not verbose:
+            phyml_globname = indata.filebase + "_" + self.impname + "*"
+            phyml_glob = glob.glob(phyml_globname)
+            for delfile in phyml_glob:
+                os.remove(delfile)
 
 
 class Imputation(object):
@@ -922,7 +932,7 @@ if __name__ == "__main__":
     parser.add_argument('-branchchk', metavar='<branchchk>',
                         help='<>.', default=True)
     parser.add_argument('-starttree', metavar='<starttree>', help='Newick or phyloxml starting tree for RAxML')
-    parser.add_argument('-verbose', metavar='<verbose>', help='Verbose output.', default=True)
+    parser.add_argument('-verbose', metavar='<verbose>', help='Verbose output.', default=False)
     parser.add_argument('-genoqual', metavar='<genoqual>', help='Genotype Quality threshold for VCF input.', default=30)
 
 
@@ -954,6 +964,8 @@ if __name__ == "__main__":
     sys.setrecursionlimit(10000)
 
     print "Working in" + os.getcwd() + " on " + inputfile +  " using " + treetype
+    timestamp = int(time.time())
+    print "Timestamp for temp files: " , timestamp
 
     indata = InData()
 
@@ -967,7 +979,7 @@ if __name__ == "__main__":
 
     print "\n****************\nTREE\n****************\n\n"
     phytree = PhyloTree()
-    phytree.input_tree(treetype = treetype, alpha = alpha, bootstrap = bootstrap, rmodel = rmodel, starttreename = starttree)
+    phytree.input_tree(treetype = treetype, alpha = alpha, bootstrap = bootstrap, rmodel = rmodel, starttreename = starttree, timestamp = timestamp)
     Phylo.draw_ascii(phytree.tree)
     phytree.output_tree(inputfile, outtreetype)
 
