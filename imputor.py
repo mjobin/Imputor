@@ -43,11 +43,14 @@ class InData(object):
         self.fullvariantset = set()
         self.fullvariants = {}
         self.sequence = [] #Sequence data
-        self.variantset = set() #Set of locations and states of all variants from reference sequence
+        self.variantset = set()
+        self.refset = set()
         self.variants = {} #Dictionary of each sample and its variation from the reference sequence
         self.filebase = None
         self.orig_vcf_pos = [] # Original listed positions of variants
         self.geninfo = {} # Dict of list of dicts
+        self.gqdict = {}
+        self.addict = {}
 
         # The eight mandatory columns of a VCF file. Here for clarity in functions below.
         self.vcf_chrom = 0
@@ -102,7 +105,7 @@ class InData(object):
             in_data-- VCF file data.
         """
         expanded_file_data = []
-        print "Expanding multi-allele entries..."
+        print "\nExpanding multi-allele entries..."
         bar = progressbar.ProgressBar(redirect_stdout=True)
         for i in bar(range(len(in_data))):
             file_line = in_data[i]
@@ -130,7 +133,7 @@ class InData(object):
             in_data-- VCF file data.
         """
         snps_data = []
-        print "Pruning non-SNP entries..."
+        print "\nPruning non-SNP entries..."
         bar = progressbar.ProgressBar()
         for i in bar(range(len(in_data))):
             file_line = in_data[i]
@@ -153,8 +156,7 @@ class InData(object):
             Intended for use with FASTA input, but will work with any AlignIO object or
             list of sequence data.
         """
-        print "Generating variants from sequence..."
-
+        print "\nGenerating variants from sequence..."
         firstseq = self.sequence[0]
         bar = progressbar.ProgressBar()
         for i in bar(range(len(self.sequence))):
@@ -169,11 +171,6 @@ class InData(object):
                 self.variantset.add(str(diff_pos)+seq_line[diff_pos])
                 curdiffs.append(str(diff_pos) + seq_line[diff_pos])
             self.variants[seq_line.name] = curdiffs
-            self.geninfo[seq_line.name] = []
-            for i in xrange(len(seq_line)):
-                genodict = {}
-                self.geninfo[seq_line.name].append(genodict)
-
         return
 
     def prune_non_seg(self):
@@ -214,7 +211,7 @@ class InData(object):
         self.variants_from_sequence() #Re-run on stripped sequence
 
     def seq_from_variants_excl(self, raw_data = None):
-        print "Generating sequence..."
+        print "\nCollecting genotype names..."
         genotype_names = []
         genotype_sequence = {}
         bar = progressbar.ProgressBar()
@@ -232,15 +229,19 @@ class InData(object):
 
         for genotype_name in genotype_names: # Step through data lines, constructing list of variants
             self.variants[genotype_name] = []
-            self.geninfo[genotype_name] = []
 
 
         snps_data = self.vcf_snp_prune(raw_data) #Ensure only SNPs are being processed
         var_count = 0
-        for file_line in snps_data:
+        print "\nGenerating sequence..."
+        bar = progressbar.ProgressBar()
+        for i in bar(range(len(snps_data))):
+            file_line = snps_data[i]
+        # for file_line in snps_data:
             cols = file_line.split('\t')
             self.orig_vcf_pos.append(cols[self.vcf_pos])
             self.variantset.add(str(var_count) + cols[self.vcf_alt])
+            self.refset.add(str(var_count) + cols[self.vcf_ref])
             if (file_line[:1] == "#") or (cols[self.vcf_chrom] == '\n' or cols[self.vcf_info+1][:2] != "GT"):
                 continue
             formatcols =  cols[self.vcf_info+1].split(":")
@@ -278,13 +279,34 @@ class InData(object):
                                 str(var_count) + alt_alleles[int(assigned_allele) - 1])
 
                 #Now dictionary of all genotype info
-                genodict = {}
                 for fi in range(len(formatcols)):
+                    # print formatcols[fi]
+                    # print str(var_count)
+                    # if str(var_count) not in self.gqdict.keys():
+                    #     newgqdict = {}
+                    #     print "newgqdict"
+                    #     self.gqdict[str(var_count)] = newgqdict
+                    # if str(var_count) not in self.addict.keys():
+                    #     newaddict = {}
+                    #     print "newaddict"
+                    #     self.addict[str(var_count)] = newaddict
                     if fi < len(genotypecols):
-                        genodict[formatcols[fi]] = genotypecols[fi]
-                for changed_genotype_name in changed_genotype_names:
-                    self.geninfo[changed_genotype_name].append(genodict)
+                        for changed_genotype_name in changed_genotype_names:
+                            finame = changed_genotype_name + "-" + str(var_count)
+                            # print finame
+                            if formatcols[fi] == "GQ":
+                                # self.gqdict[str(var_count)][changed_genotype_name] = genotypecols[fi]
+                                self.gqdict[finame] = genotypecols[fi]
+                                # print "GQ Adding " , finame, " " ,genotypecols[fi]
+                            if formatcols[fi] == "AD":
+                                # self.addict[str(var_count)][changed_genotype_name] = genotypecols[fi]
+                                self.addict[finame] = genotypecols[fi]
+                                # print "AD Adding ", finame, " ", genotypecols[fi]
+
+
+                            # self.geninfo[finame] = genotypecols[fi]
             var_count = var_count + 1
+
         for geno in genotype_sequence.keys():
             genotype_sequence[geno] = ''.join(genotype_sequence[geno])
 
@@ -525,7 +547,7 @@ class Imputation(object):
     """Imputation of missing mutations given input data and a phylogenetic tree.
     """
 
-    def __init__(self, indata, phytree, mutrate, threshold, tstv, multi, bmchk, brchk, genoqual):
+    def __init__(self, indata, phytree, mutrate, threshold, tstv, multi, bmchk, brchk, genoqual, adthresh):
         self.cpucount = multiprocessing.cpu_count()
         self.workseq = {}
         self.imputedseq = MultipleSeqAlignment([])
@@ -771,19 +793,19 @@ class Imputation(object):
     def detect_by_parsimony(self, term, tree, curvar, parents, nc):
         neighbors = set()
         curnode = term
+        termname = str(term)
+        curvarnum = curvar[:-1]
+        finame = termname + "-" + curvarnum
 
         #Collect closest neighbors on tree
         while len(neighbors) < nc:
             if curnode not in parents: # will not go past the root
-                # print "not in parents"
                 break
             curparent = parents[curnode]
-            # print "\t", curparent
             empty = []
             allkids = phytree.collect_all_kids(curparent, empty)
             for kid in allkids:
                 if kid is not term:
-                    # print "\t\t", kid
                     neighbors.add(kid)
                     if len(neighbors) >= nc:
                         break
@@ -792,32 +814,40 @@ class Imputation(object):
         orig = self.workseq[str(term)][int(curvar[:-1])]
         for neighbor in neighbors:
             nearest.add(self.workseq[str(neighbor)][int(curvar[:-1])])
-
         only = nearest.pop() # Will now be a single base
         if only in self.missing:
-            return [str(term), curvar, orig, only, "0"]
+            return [termname, curvar, orig, only, "0"]
         if len(nearest) != 1: # The nearest do not all match
-            return [str(term), curvar, orig, only, "0"]
+            return [termname, curvar, orig, only, "0"]
         if orig != only: # If target sequence does not match matching non-missing neighbors
             if self.bmchk == True: #  Do not impute if checking for and failing to find N matching neighbours
                 if self.backmutchk(curparent, neighbors, curvar, orig) == False:
-                    return [str(term), curvar, orig, only, "0"]
-            if "GQ" in indata.geninfo[str(term)][int(curvar[:-1])]:
-                if indata.geninfo[str(term)][int(curvar[:-1])]["GQ"] < genoqual:
-                    # print "GQ: ", indata.geninfo[str(term)][int(curvar[:-1])]["GQ"]
-                    return [str(term), curvar, orig, only, "1"]
+                    return [termname, curvar, orig, only, "0"]
+            if finame in indata.gqdict:
+                if int(indata.gqdict.get(finame)) < genoqual:
+                    return [termname, curvar, orig, only, "1"]
+            if finame in indata.addict:
+                adchk = curvarnum + orig
+                if adchk in indata.refset:
+                    ads = indata.addict[finame].split(",")
+                    notref = 0
+                    for adad in xrange(1, len(ads)):
+                        notref += adad
+                    if notref > 0:
+                        if float(ads[0])/float(notref) < adthresh:
+                            return [termname, curvar, orig, only, "1"]
             if self.brchk == True:
                 tstvchk = self.transversionchk(only, self.workseq[str(term)][int(curvar[:-1])], self.tstv)
                 if tstvchk > 0:
                     btime = tree.distance(parents[term], term)
                     pk = (((self.mu * btime) ** 1) * (math.exp(-self.mu * btime))) / math.factorial(1) * tstv
-                    return [str(term), curvar, orig, only, str(pk)]
+                    return [termname, curvar, orig, only, str(pk)]
                 else:
-                    return [str(term), curvar, orig, only, "0"]
+                    return [termname, curvar, orig, only, "0"]
             else:
-                return [str(term), curvar, orig, only, "1"]
+                return [termname, curvar, orig, only, "1"]
         else:
-            return [str(term), curvar, orig, only, "0"]
+            return [termname, curvar, orig, only, "0"]
 
     def output_imputed(self, inputfile, out, impout):
         if verbose:
@@ -934,6 +964,7 @@ if __name__ == "__main__":
     parser.add_argument('-starttree', metavar='<starttree>', help='Newick or phyloxml starting tree for RAxML')
     parser.add_argument('-verbose', metavar='<verbose>', help='Verbose output.', default=False)
     parser.add_argument('-genoqual', metavar='<genoqual>', help='Genotype Quality threshold for VCF input.', default=30)
+    parser.add_argument('-adthresh', metavar='<adthresh>', help='Threshold for Allelic Depth.', default=0.66)
 
 
     args = parser.parse_args()
@@ -959,7 +990,8 @@ if __name__ == "__main__":
     branchchk = args.branchchk
     starttree = args.starttree
     verbose = args.verbose
-    genoqual = args.genoqual
+    genoqual = int(args.genoqual)
+    adthresh = float(args.adthresh)
 
     sys.setrecursionlimit(10000)
 
@@ -985,7 +1017,7 @@ if __name__ == "__main__":
 
 
     print "\n****************\nIMPUTATION\n****************\n\n"
-    impute = Imputation(indata, phytree, mutrate, threshold, tstv, multi, backmutchk, branchchk, genoqual)
+    impute = Imputation(indata, phytree, mutrate, threshold, tstv, multi, backmutchk, branchchk, genoqual, adthresh)
     impute.impute(imputetype, depth, neighbors, bootstrap)
     impute.output_imputed(inputfile, outtype, impout)
 
