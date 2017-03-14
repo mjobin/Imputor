@@ -266,7 +266,6 @@ class InData(object):
             self.orig_vcf_pos.append(cols[self.vcf_pos])
             self.variantset.add(str(var_count) + cols[self.vcf_alt])
             self.refset.add(str(var_count) + cols[self.vcf_ref])
-            self.reflist.append(cols[self.vcf_ref])
             if (file_line[:1] == "#") or (cols[self.vcf_chrom] == '\n' or cols[self.vcf_info+1][:2] != "GT"):
                 continue
             formatcols =  cols[self.vcf_info+1].split(":")
@@ -315,11 +314,22 @@ class InData(object):
                                 # print "GQ Adding " , finame, " " ,genotypecols[fi]
                             if formatcols[fi] == "AD":
                                 # self.addict[str(var_count)][changed_genotype_name] = genotypecols[fi]
-                                self.addict[finame] = genotypecols[fi]
-                                # print "AD Adding ", finame, " ", genotypecols[fi]
-
-
-                            # self.geninfo[finame] = genotypecols[fi]
+                                adcols = genotypecols[fi].split(",")
+                                if len(adcols) == (len(alt_alleles)+1):
+                                    colc = 0
+                                    ad = ""
+                                    for adcol in adcols:
+                                        if colc == 0:
+                                            ad += cols[self.vcf_ref]
+                                        else :
+                                            ad += alt_alleles[colc-1]
+                                        ad += "-"
+                                        ad += adcol
+                                        colc = colc + 1
+                                        if colc < len(adcols):
+                                            ad += ","
+                                    self.addict[finame] = ad
+                                    # print "AD Adding ", finame, " ", ad
             var_count = var_count + 1
 
         for geno in genotype_sequence.keys():
@@ -585,7 +595,7 @@ class Imputation(object):
     """Imputation of mutations given input data and a phylogenetic tree.
     """
 
-    def __init__(self, indata, phytree, mutrate, threshold, tstv, multi, bmchk, brchk, genoqual, adthresh, verbose):
+    def __init__(self, indata, phytree, mutrate, threshold, multi):
         self.cpucount = multiprocessing.cpu_count()
         self.workseq = {}
         self.imputedseq = MultipleSeqAlignment([])
@@ -593,15 +603,11 @@ class Imputation(object):
         self.phytree = phytree
         self.mu = mutrate
         self.threshold = threshold
-        self.tstv = tstv
         self.imputelist = []
         self.bootreps = {}
         self.multi = multi
-        self.bmchk = bmchk
         self.acgt = set(['A', 'C', 'G', 'T'])
         self.missing = set(['.', '-', 'N'])
-        self.brchk = brchk
-        self.verbose = verbose
 
 
         for seq in indata.sequence:
@@ -624,7 +630,6 @@ class Imputation(object):
         impute_threads =[]
 
         if bootstrap > 0: # Bootstrap replicates
-            self.brchk = False # No checking branch lengths when comparing bootstrap reps
             bpar = iter(phytree.btreeparents)
 
             bar = progressbar.ProgressBar()
@@ -645,7 +650,7 @@ class Imputation(object):
             for bootrep in self.bootreps:
                 newimpute = bootrep.split("-")
                 newimpute.append(str(self.bootreps[bootrep][0] / self.bootreps[bootrep][1]))
-                if self.verbose:
+                if verbose:
                     self.imputelist.append(newimpute)
                     self.workseq[newimpute[0]][int(newimpute[1][:-1])] = newimpute[3]
                 else:
@@ -692,7 +697,7 @@ class Imputation(object):
             self.bootreps[bootfront][1] = self.bootreps[bootfront][1] + 1
 
     def impute_threshold(self, term, tree, parents, neighbors):
-        """ Imputation via branch length.
+        """ Imputation on best tree.
 
             Keyword arguments:
             term -- Terminal node on tree to be examined.
@@ -703,7 +708,7 @@ class Imputation(object):
         """
         for curvar in self.indata.variantset:
             newimpute = self.detect_by_parsimony(term, tree, curvar, parents, neighbors)
-            if self.verbose == True:
+            if verbose == True:
                 self.imputelist.append(newimpute)
             else:
                 if newimpute[5] == "T":
@@ -790,37 +795,28 @@ class Imputation(object):
             return [termname, curvar, orig, only, "Neighbors All Missing", "F"]
         elif orig != only: # If target sequence does not match matching non-missing neighbors
             if orig in self.missing:
-                return [termname, curvar, orig, only, "Target Missing", "T"]
-            if self.bmchk == True: #  Do not impute if checking for and failing to find N matching neighbours
+                return [termname, curvar, orig, only, "Missing Imputed", "T"]
+            if nobackmutchk == False:
                 if self.backmutchk(term, parents, neighbors, curvar, orig) == False:
                     return [termname, curvar, orig, only, "No Back Mutation", "F"]
             if finame in indata.gqdict:
                 if int(indata.gqdict.get(finame)) < genoqual:
-                    return [termname, curvar, orig, only, "GQ", "T"]
+                    return [termname, curvar, orig, only, "Imputed by GQ", "T"]
             if finame in indata.addict:
-                adchk = curvarnum + orig
-                if adchk in indata.refset:
-                    ads = indata.addict[finame].split(",")
-                    notref = 0
-                    for adad in xrange(1, len(ads)):
-                        notref += adad
-                    if notref > 0:
-                        if float(ads[0])/float(notref) < adthresh:
-                            return [termname, curvar, orig, only, "AD", "T"]
-            if self.brchk == True:
-                tstvchk = self.transversionchk(only, self.workseq[str(term)][int(curvar[:-1])], self.tstv)
-                if tstvchk > 0:
-                    btime = (tree.distance(parents[term], term)* float(indata.maxseqlength)) /self.mu #time calced for whole branch, not this mutation only
-                    pk = (((self.mu * btime) ** 1) * (math.exp(-self.mu * btime))) / 1 * tstv
-                    print term,  " ", curvar, "dist: " , tree.distance(parents[term]), " branchtime: ", btime, " pk: ", pk
-                    if pk < self.threshold:
-                        return [termname, curvar, orig, only, "Branch Length", "T"]
+                ads = indata.addict[finame].split(",")
+                print ads
+                thisun = 0.0
+                otheruns = 0.0
+                for ad in ads:
+                    a = ad.split("-")
+                    if(a[0]) == orig:
+                        thisun = thisun + float(a[1])
                     else:
-                        return [termname, curvar, orig, only,  "Branch Length Too Long", "F"]
-                else:
-                    return [termname, curvar, orig, only, "TSTV Fail", "F"]
-            else:
-                return [termname, curvar, orig, only, "Imputed", "T"]
+                        otheruns = otheruns + float(a[1])
+                if otheruns > 0.0:
+                    if thisun / otheruns < adthresh:
+                        return [termname, curvar, orig, only, "Imputed by AD", "T"]
+            return [termname, curvar, orig, only, "Non-missing Imputed", "T"]
         else:
             return [termname, curvar, orig, only, "Matches Neighbors", "F"]
 
@@ -830,7 +826,7 @@ class Imputation(object):
             if indata.orig_vcf_pos:
                 imputed[1] = indata.orig_vcf_pos[int(imputed[1][:-1])]
 
-        if self.verbose == True:
+        if verbose == True:
             if len(self.imputelist) > 0:
                 print "Imputed Mutations"
                 print "SUBJECTID | VAR | FROM | TO | TYPE | IMPUTED"
@@ -869,43 +865,6 @@ class Imputation(object):
             # SeqIO.write(self.imputedseq, outseqfile, "fasta")
 
 
-class ChromStats(object):
-    """Data from object or text files for assessment of false negative rates.
-    """
-
-    def __init__(self, indata, haplogroupfile, weightsfile, polysfile):
-        self.haplogroups = {}  # Trusted haplogroups
-        self.weights = {}
-        self.polys = {}
-
-        if haplogroupfile[-3:] == 'obj': #object file
-            haplogroupobj = open(haplogroupfile, 'rb')
-            self.haplogroups = pickle.load(haplogroupobj)
-        elif haplogroupfile[-3:] == 'txt': #text file
-            file_data = open(haplogroupfile, 'r')
-            raw_data = []
-            for file_line in file_data:
-                raw_data.append(file_line.rstrip())
-
-        if weightsfile[-3:] == 'obj': #object file
-            weightsobj = open(weightsfile, 'rb')
-            self.weights = pickle.load(weightsobj)
-        elif weightsfile[-3:] == 'txt': #text file
-            file_data = open(weightstfilefile, 'r')
-            raw_data = []
-            for file_line in file_data:
-                raw_data.append(file_line.rstrip())
-
-        if polysfile[-3:] == 'obj': #object file
-            polysobj = open(polysfile, 'rb')
-            self.polys = pickle.load(polysobj)
-        elif polysfile[-3:] == 'txt': #text file
-            file_data = open(polysfile, 'r')
-            raw_data = []
-            for file_line in file_data:
-                raw_data.append(file_line.rstrip())
-
-
 
 
 
@@ -937,10 +896,8 @@ if __name__ == "__main__":
     parser.add_argument('-out', metavar='<out>', help='Output file type: fasta or vcf', default='fasta')
     parser.add_argument('-impout', metavar='<impout>', help='Output list of imputed mutations', default=True)
     parser.add_argument('-multi', metavar='<multi>', help='Multiprocessing.', default=True)
-    parser.add_argument('-backmutchk', dest='backmutchk', help='Only impute non-missing sites if it is a suspected back-mutation.', action='store_true')
-    parser.set_defaults(backmutchk=False)
-    parser.add_argument('-branchchk', dest='branchchk', help='<>.', action='store_true')
-    parser.set_defaults(branchchk=False)
+    parser.add_argument('-nobackmutchk', dest='nobackmutchk', help='Skip back-mutation check.', action='store_true')
+    parser.set_defaults(nobackmutchk=False)
     parser.add_argument('-starttree', metavar='<starttree>', help='Newick or phyloxml starting tree for RAxML')
     parser.add_argument('-verbose', dest='verbose', help='Verbose output.', action='store_true')
     parser.set_defaults(verbose=False)
@@ -968,9 +925,7 @@ if __name__ == "__main__":
     outtype = args.out
     impout = args.impout
     multi = args.multi
-    backmutchk = bool(args.backmutchk)
-
-    branchchk = bool(args.branchchk)
+    nobackmutchk = bool(args.nobackmutchk)
     starttree = args.starttree
     verbose = bool(args.verbose)
     genoqual = int(args.genoqual)
@@ -1004,18 +959,12 @@ if __name__ == "__main__":
 
 
     print "\n****************\nIMPUTATION\n****************\n\n"
-    impute = Imputation(indata, phytree, mutrate, threshold, tstv, multi, backmutchk, branchchk, genoqual, adthresh, verbose)
+    impute = Imputation(indata, phytree, mutrate, threshold, multi)
     impute.impute(bootstrap)
     impute.output_imputed(inputfile, outtype, impout)
 
 
 
-
-    # print "\n****************\nFALSE NEGATIVES\n****************\n\n"
-    # stats = ChromStats(indata, hapobj, wtobj, polyobj)
-    # #print stats.haplogroups
-    # #print stats.weights
-    # #print stats.polys
 
 
 
