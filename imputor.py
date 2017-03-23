@@ -12,16 +12,13 @@ import sys
 import random
 import glob
 import time
-import math
 import argparse
 from argparse import RawTextHelpFormatter
 import pickle
 import threading
 import multiprocessing
-import operator
 from Bio import AlignIO
 from Bio.Phylo.TreeConstruction import *
-from Bio import SeqIO
 from Bio import Phylo
 from Bio.Phylo.Applications import PhymlCommandline
 from Bio.Phylo.Applications import RaxmlCommandline
@@ -88,14 +85,6 @@ class InData(object):
             # Split multi-allelic sites
             expanded_file_data = self.vcf_expand_multi_allele(raw_data)
 
-            # Prune non-SNPs
-            snps_data = self.vcf_snp_prune(expanded_file_data)
-            
-            # Generate variants
-            for snp_line in snps_data:
-                cols = snp_line.split('\t')
-                # self.variantset.add(cols[self.vcf_pos]+cols[self.vcf_alt])
-        
             # Generate sequence from only those areas with any polymorphism
             self.seq_from_variants_excl(raw_data)
 
@@ -164,12 +153,12 @@ class InData(object):
             # If the second character is a (meta-info line) or a blank line, ignore
             if (file_line[:1] == "#") or (cols[self.vcf_chrom] == '\n'):
                 continue
-            if len(cols[self.vcf_ref]) > 1 or len(cols[self.vcf_alt]) > 1:  # if not a snp
-                continue
-            elif cols[self.vcf_ref] == '-' or cols[self.vcf_alt] == '-': # if not a snp
-                continue
-            elif cols[self.vcf_ref] == '.' or cols[self.vcf_alt] == '.': # if not a snp
-                continue
+            # if len(cols[self.vcf_ref]) > 1 or len(cols[self.vcf_alt]) > 1:  # if not a snp
+            #     continue
+            # elif cols[self.vcf_ref] == '-' or cols[self.vcf_alt] == '-': # if not a snp
+            #     continue
+            # elif cols[self.vcf_ref] == '.' or cols[self.vcf_alt] == '.': # if not a snp
+            #     continue
             snps_data.append(file_line)
         return snps_data
 
@@ -264,7 +253,7 @@ class InData(object):
             if int(cols[self.vcf_pos]) > self.maxseqlength:
                 self.maxseqlength = int(cols[self.vcf_pos])
             self.orig_vcf_pos.append(cols[self.vcf_pos])
-            self.variantset.add(str(var_count) + cols[self.vcf_alt])
+            # self.variantset.add(str(var_count) + cols[self.vcf_alt])
             self.refset.add(str(var_count) + cols[self.vcf_ref])
             if (file_line[:1] == "#") or (cols[self.vcf_chrom] == '\n' or cols[self.vcf_info+1][:2] != "GT"):
                 continue
@@ -294,6 +283,7 @@ class InData(object):
                         genotype_sequence[changed_genotype_names[allele_pos]].append("N")
                     else:
                         genotype_sequence[changed_genotype_names[allele_pos]].append(alt_alleles[int(assigned_allele)-1])
+                        self.variantset.add(str(var_count) + alt_alleles[int(assigned_allele) - 1])
                         if changed_genotype_names[allele_pos] in self.variants:  # Keys added to self.variants here
                             self.variants[changed_genotype_names[allele_pos]].append(  # to avoid empty entries
                                 str(var_count) + alt_alleles[int(assigned_allele) - 1])
@@ -626,9 +616,6 @@ class Imputation(object):
         """
 
 
-
-        impute_threads =[]
-
         if bootstrap > 0: # Bootstrap replicates
             bpar = iter(phytree.btreeparents)
 
@@ -642,17 +629,13 @@ class Imputation(object):
                 for term in terms:
                     neighbors = phytree.collect_kids_rootward(term, bparents, 0, maxheight, maxdepth, maxneighbors)
                     self.impute_bootstrap(term, btree, bparents, neighbors)
-                #     t = threading.Thread(target=self.impute_bootstrap, args=(term, btree, bparents, neighbors))
-                #     t.start()
-                #     impute_threads.append(t)
-                # for thread in impute_threads:  # Block until all complete
-                #     thread.join()
             for bootrep in self.bootreps:
-                newimpute = bootrep.split("-")
+                newimpute = bootrep.split(".")
                 newimpute.append(str(self.bootreps[bootrep][0] / self.bootreps[bootrep][1]))
                 if verbose:
                     self.imputelist.append(newimpute)
-                    self.workseq[newimpute[0]][int(newimpute[1][:-1])] = newimpute[3]
+                    if (self.bootreps[bootrep][0] / self.bootreps[bootrep][1] > (1 - self.threshold)):
+                        self.workseq[newimpute[0]][int(newimpute[1][:-1])] = newimpute[3]
                 else:
                      if(self.bootreps[bootrep][0]/self.bootreps[bootrep][1] > (1-self.threshold)):
                          self.imputelist.append(newimpute)
@@ -665,17 +648,12 @@ class Imputation(object):
             for term in terms:
                 neighbors = phytree.collect_kids_rootward(term, self.phytree.treeparents, 0, maxheight, maxdepth, maxneighbors)
                 self.impute_threshold(term, self.phytree.tree, self.phytree.treeparents, neighbors)
-            #     t = threading.Thread(target=self.impute_threshold, args=(term, self.phytree.tree, self.phytree.treeparents, neighbors))
-            #     t.start()
-            #     impute_threads.append(t)
-            # for thread in impute_threads:  # Block until all complete
-            #     thread.join()
             for newimpute in self.imputelist:
                 if newimpute[5] == "T":
                     self.workseq[newimpute[0]][int(newimpute[1][:-1])] = newimpute[3]
         self.process_imputed()
 
-    def impute_bootstrap(self, term, btree, bparents):
+    def impute_bootstrap(self, term, btree, bparents, neighbors):
         """ Imputation with bootstrap replicates.
 
             Keyword arguments:
@@ -687,12 +665,12 @@ class Imputation(object):
         """
         for curvar in self.indata.variantset:
             newimpute = self.detect_by_parsimony(term, btree, curvar,
-                                                 bparents, neighbors, maxneighbors)
+                                                 bparents, neighbors)
 
-            bootfront = "-".join(newimpute[0:5])
+            bootfront = ".".join(newimpute[0:5])
             if bootfront not in self.bootreps:
                 self.bootreps[bootfront] = [0,0]
-            if newimpute[5] == "1":
+            if newimpute[5] == "T":
                 self.bootreps[bootfront][0] = self.bootreps[bootfront][0] + 1
             self.bootreps[bootfront][1] = self.bootreps[bootfront][1] + 1
 
@@ -785,40 +763,47 @@ class Imputation(object):
         for neighbor in neighbors:
             nearest.add(self.workseq[str(neighbor)][int(curvar[:-1])])
 
-        if len(neighbors) < maxneighbors:
-            return [termname, curvar, orig, ",".join(nearest), "Not enough neighbors", "F"]
-        if len(nearest) > 1:
+        if len(nearest) > 1: # Cannot allow non-matching ever to impute sequence, thus this is first check
             return [termname, curvar, orig, ",".join(nearest), "Neighbors Non-matching", "F"]
-
+        if len(nearest) < 1: # Cannot allow non-matching ever to impute sequence, thus this is first check
+            return [termname, curvar, orig, ".", "No neighbors", "F"]
         only = nearest.pop()
-        if only in self.missing:
-            return [termname, curvar, orig, only, "Neighbors All Missing", "F"]
-        elif orig != only: # If target sequence does not match matching non-missing neighbors
-            if orig in self.missing:
-                return [termname, curvar, orig, only, "Missing Imputed", "T"]
-            if nobackmutchk == False:
-                if self.backmutchk(term, parents, neighbors, curvar, orig) == False:
-                    return [termname, curvar, orig, only, "No Back Mutation", "F"]
-            if finame in indata.gqdict:
-                if int(indata.gqdict.get(finame)) < genoqual:
-                    return [termname, curvar, orig, only, "Imputed by GQ", "T"]
-            if finame in indata.addict:
-                ads = indata.addict[finame].split(",")
-                print ads
-                thisun = 0.0
-                otheruns = 0.0
-                for ad in ads:
-                    a = ad.split("-")
-                    if(a[0]) == orig:
-                        thisun = thisun + float(a[1])
-                    else:
-                        otheruns = otheruns + float(a[1])
-                if otheruns > 0.0:
-                    if thisun / otheruns < adthresh:
-                        return [termname, curvar, orig, only, "Imputed by AD", "T"]
-            return [termname, curvar, orig, only, "Non-missing Imputed", "T"]
+        if orig in self.missing:
+            if len(neighbors) < 2:
+                return [termname, curvar, orig, only, "Not enough neighbors", "F"]
+            elif only in self.missing:
+                return [termname, curvar, orig, only, "Neighbors All Missing", "F"]
+            else:
+                print curvar
+                return [termname, curvar, orig, only, "Imputed Missing", "T"]
         else:
-            return [termname, curvar, orig, only, "Matches Neighbors", "F"]
+            if len(neighbors) < maxneighbors:
+                return [termname, curvar, orig, only, "Not enough neighbors", "F"]
+            if only in self.missing:
+                return [termname, curvar, orig, only, "Neighbors All Missing", "F"]
+            if orig != only: # If target sequence does not match matching non-missing neighbors
+                if nobackmutchk == False:
+                    if self.backmutchk(term, parents, neighbors, curvar, orig) == False:
+                        return [termname, curvar, orig, only, "No Back Mutation", "F"]
+                if finame in indata.gqdict:
+                    if int(indata.gqdict.get(finame)) < genoqual:
+                        return [termname, curvar, orig, only, "Imputed by GQ", "T"]
+                if finame in indata.addict:
+                    ads = indata.addict[finame].split(",")
+                    thisun = 0.0
+                    otheruns = 0.0
+                    for ad in ads:
+                        a = ad.split("-")
+                        if(a[0]) == orig:
+                            thisun = thisun + float(a[1])
+                        else:
+                            otheruns = otheruns + float(a[1])
+                    if otheruns > 0.0:
+                        if thisun / otheruns < adthresh:
+                            return [termname, curvar, orig, only, "Imputed by AD", "T"]
+                return [termname, curvar, orig, only, "Imputed", "T"]
+            else:
+                return [termname, curvar, orig, only, "Matches Neighbors", "F"]
 
     def output_imputed(self, inputfile, out, impout):
 
