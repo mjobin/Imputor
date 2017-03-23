@@ -14,15 +14,12 @@ import glob
 import time
 import argparse
 from argparse import RawTextHelpFormatter
-import pickle
-import threading
 import multiprocessing
 from Bio import AlignIO
 from Bio.Phylo.TreeConstruction import *
 from Bio import Phylo
 from Bio.Phylo.Applications import PhymlCommandline
 from Bio.Phylo.Applications import RaxmlCommandline
-from Bio.Phylo.Consensus import bootstrap_trees
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 from Bio.Align import MultipleSeqAlignment
@@ -338,13 +335,11 @@ class PhyloTree(object):
 
     def __init__(self):
         self.tree = None  # Phylogenetic tree to be loaded or constructed from data. Newick format.
-        self.btrees = [] #  Bootstrap replicates of trees. Newick format.
         self.treeparents = {}
-        self.btreeparents = []
         self.starttree = None # Phylogenetic tree used as starting tree in RAxML
 
 
-    def input_tree(self, treetype=None, alpha=None, bootstrap=None, rmodel=None, starttreename=None, timestamp=None, maxthreads=None):
+    def input_tree(self, treetype=None, alpha=None, rmodel=None, starttreename=None, timestamp=None, maxthreads=None):
         """ Takes input tree file or sequence data.
 
             Keyword arguments:
@@ -356,9 +351,6 @@ class PhyloTree(object):
         self.impname = "imp" + str(timestamp)
 
         if self.starttreename:
-            if bootstrap > 0:
-                print "ERROR: May not provide starting tree with boot != 0."
-                sys.exit()
             if self.starttreename[-3:] == 'xml':
                 self.starttree = Phylo.read(self.starttreename, "phyloxml")
             elif self.starttreename[-6:] == 'newick':
@@ -372,15 +364,11 @@ class PhyloTree(object):
         elif self.treetype == 'pars':
             self.parsimony_tree()
         elif self.treetype == 'RAxML':
-            self.raxml_tree(rmodel, bootstrap)
+            self.raxml_tree(rmodel)
         else:
-            self.phyml_tree(alpha, bootstrap)
+            self.phyml_tree(alpha)
 
         self.treeparents = self.all_parents(self.tree)
-
-        for btree in self.btrees:
-            self.btreeparents.append(self.all_parents(btree))
-
 
 
     def output_tree(self, inputfile, outtreetype):
@@ -477,9 +465,9 @@ class PhyloTree(object):
         searcher = NNITreeSearcher(scorer)
         constructor = ParsimonyTreeConstructor(searcher)
         self.tree = constructor.build_tree(indata.sequence)
-        self.btrees = Phylo.Consensus.bootstrap_trees(indata.sequence, bootstrap, constructor)
 
-    def raxml_tree(self, rmodel=None, bootstrap=None):
+
+    def raxml_tree(self, rmodel=None):
         """ Constructs a tree via maximum likelihood by invoking external software RAxML.
             See docs for RAxML installation and setup.
 
@@ -498,6 +486,7 @@ class PhyloTree(object):
 
         # Output sequence to a temp FASTA file
         tempfastafile = indata.filebase + self.impname + "_fastatmp.fasta"
+        reducedtempfastafile = indata.filebase + self.impname + "_fastatmp.fasta.reduced"
         AlignIO.write(indata.sequence, tempfastafile, "fasta")
         rng = random.SystemRandom()  # Uses /dev/urandom
 
@@ -512,10 +501,6 @@ class PhyloTree(object):
         if self.starttree:
             Phylo.write(self.starttree, raxmlstarttreename, "newick")
             raxml_args["starting_tree"] = raxmlstarttreename
-        elif bootstrap > 0:
-            raxml_args["num_replicates"] = bootstrap
-            raxml_args["algorithm"] = "a"
-            raxml_args['rapid_bootstrap_seed'] = rng.randint(0, sys.maxint)
 
         raxml_cline = RaxmlCommandline(**raxml_args)
 
@@ -527,9 +512,7 @@ class PhyloTree(object):
             print out_log
         raxmlbesttreename = "RAxML_bestTree." + self.impname
         self.tree = Phylo.read(raxmlbesttreename, "newick")
-        if bootstrap>0:
-            raxmlbsname = "RAxML_bootstrap." + self.impname
-            self.btrees = list(Phylo.parse(raxmlbsname, "newick"))
+
 
         # Erase RaXML intermediate files
         if not verbose:
@@ -537,8 +520,9 @@ class PhyloTree(object):
             for delfile in raxml_glob:
                 os.remove(delfile)
         os.remove(tempfastafile)
+        os.remove(reducedtempfastafile)
 
-    def phyml_tree(self, alpha=None, boostrap=None):
+    def phyml_tree(self, alpha=None):
         """ Constructs a tree via maximum likelihood by invoking external software PhyML.
             See docs for PhyML installation and setup.
 
@@ -557,8 +541,7 @@ class PhyloTree(object):
         if self.starttree:
             Phylo.write(self.starttree, phystarttreename, "newick")
             phyml_args["input_tree"] = phystarttreename
-        elif bootstrap > 0:
-            phyml_args["bootstrap"] = bootstrap
+
 
         cmdline = PhymlCommandline(**phyml_args)
         print "Commandline for PhyML: " + str(cmdline)
@@ -568,9 +551,6 @@ class PhyloTree(object):
             print out_log
         phytreefile = tempphyfile + "_phyml_tree.txt"
         self.tree = Phylo.read(phytreefile, "newick")
-        if bootstrap > 0:
-            phybtreefile = tempphyfile + "_phyml_boot_trees.txt"
-            self.btrees = Phylo.parse(phybtreefile, "newick")
         if not verbose:
             phyml_globname = indata.filebase + "_" + self.impname + "*"
             phyml_glob = glob.glob(phyml_globname)
@@ -591,7 +571,6 @@ class Imputation(object):
         self.mu = mutrate
         self.threshold = threshold
         self.imputelist = []
-        self.bootreps = {}
         self.multi = multi
         self.acgt = set(['A', 'C', 'G', 'T'])
         self.missing = set(['.', '-', 'N'])
@@ -601,75 +580,24 @@ class Imputation(object):
             self.workseq[seq.name] = list(str(seq.seq))  # Begin with output sequence matching input
 
 
-    def impute(self, bootstrap):
+    def impute(self):
         """ Sets up multiprocessing of imputation function for all terminal nodes.
 
             Keyword arguments:
             imputetype -- Type of search used to locate possible sites to impute.
             depth -- Depth of search up and down tree to find neighbours.
             neighbors -- Minimum number of identical non-missing neighbors in order to impute.
-            bootstrap -- Number of bootstrap replicates.
 
         """
-
-
-        if bootstrap > 0: # Bootstrap replicates
-            bpar = iter(phytree.btreeparents)
-
-            bar = progressbar.ProgressBar()
-            for i in bar(range(len(self.phytree.btrees))):
-                btree = self.phytree.btrees[i]
-            # for btree in self.phytree.btrees:
-                terms = btree.get_terminals()
-                random.shuffle(terms)
-                bparents = next(bpar)
-                for term in terms:
-                    neighbors = phytree.collect_kids_rootward(term, bparents, 0, maxheight, maxdepth, maxneighbors)
-                    self.impute_bootstrap(term, btree, bparents, neighbors)
-            for bootrep in self.bootreps:
-                newimpute = bootrep.split(".")
-                newimpute.append(str(self.bootreps[bootrep][0] / self.bootreps[bootrep][1]))
-                if verbose:
-                    self.imputelist.append(newimpute)
-                    if (self.bootreps[bootrep][0] / self.bootreps[bootrep][1] > (1 - self.threshold)):
-                        self.workseq[newimpute[0]][newimpute[1]] = newimpute[3]
-                else:
-                     if(self.bootreps[bootrep][0]/self.bootreps[bootrep][1] > (1-self.threshold)):
-                         self.imputelist.append(newimpute)
-                         self.workseq[newimpute[0]][newimpute[1]] = newimpute[3]
-
-        else:
-            Phylo.draw_ascii(self.phytree.tree)
-            terms = self.phytree.tree.get_terminals()  # Get all internal nodes on tree. These are the ones with samples.
-            random.shuffle(terms)
-            for term in terms:
-                neighbors = phytree.collect_kids_rootward(term, self.phytree.treeparents, 0, maxheight, maxdepth, maxneighbors)
-                self.impute_threshold(term, self.phytree.tree, self.phytree.treeparents, neighbors)
-            for newimpute in self.imputelist:
-                if newimpute[5] == "T":
-                    self.workseq[newimpute[0]][newimpute[1]] = newimpute[3]
-        self.process_imputed()
-
-    def impute_bootstrap(self, term, btree, bparents, neighbors):
-        """ Imputation with bootstrap replicates.
-
-            Keyword arguments:
-            term -- Terminal node on tree to be examined.
-            btree -- Tree to be examined.
-            bparents - List of parent nodes of each node in tree.
-            neighbors -- Minimum number of identical neighbors to impute.
-
-        """
-        for curvar in self.indata.variantset:
-            newimpute = self.detect_by_parsimony(term, btree, curvar,
-                                                 bparents, neighbors)
-
-            bootfront = ".".join(newimpute[0:5])
-            if bootfront not in self.bootreps:
-                self.bootreps[bootfront] = [0,0]
+        terms = self.phytree.tree.get_terminals()  # Get all internal nodes on tree. These are the ones with samples.
+        random.shuffle(terms)
+        for term in terms:
+            neighbors = phytree.collect_kids_rootward(term, self.phytree.treeparents, 0, maxheight, maxdepth, maxneighbors)
+            self.impute_threshold(term, self.phytree.tree, self.phytree.treeparents, neighbors)
+        for newimpute in self.imputelist:
             if newimpute[5] == "T":
-                self.bootreps[bootfront][0] = self.bootreps[bootfront][0] + 1
-            self.bootreps[bootfront][1] = self.bootreps[bootfront][1] + 1
+                self.workseq[newimpute[0]][newimpute[1]] = newimpute[3]
+        self.process_imputed()
 
     def impute_threshold(self, term, tree, parents, neighbors):
         """ Imputation on best tree.
@@ -859,7 +787,6 @@ if __name__ == "__main__":
     parser.add_argument('-tree',metavar='<tree>',help='tree type; <treefilename.xml>, pars, RAxML, PhyML', default='RAxML')
     parser.add_argument('-outtree', metavar='<outtree>', help='Output format for tree', default='phyloxml')
     parser.add_argument('-alpha',metavar='<alpha>',help='Value of gamma shape parameter.', default='e')
-    parser.add_argument('-boot',metavar='<boot>',help='Number of bootstrap replicates.', default='10')
     parser.add_argument('-rmodel',metavar='<rmodel>',help='Model type for RaXML.', default='GTRCAT')
     parser.add_argument('-maxheight', metavar='<maxheight>', help='Height of search toward root for collecting neighbors.',
                         default=2)
@@ -891,7 +818,6 @@ if __name__ == "__main__":
     treetype = args.tree
     outtreetype = args.outtree
     alpha = args.alpha
-    bootstrap = int(args.boot)
     rmodel = args.rmodel
     hapobj = args.hapobj
     wtobj = args.wtobj
@@ -933,14 +859,14 @@ if __name__ == "__main__":
 
     print "\n****************\nTREE\n****************\n\n"
     phytree = PhyloTree()
-    phytree.input_tree(treetype = treetype, alpha = alpha, bootstrap = bootstrap, rmodel = rmodel, starttreename = starttree, timestamp = timestamp, maxthreads=maxthreads)
+    phytree.input_tree(treetype = treetype, alpha = alpha, rmodel = rmodel, starttreename = starttree, timestamp = timestamp, maxthreads=maxthreads)
     Phylo.draw_ascii(phytree.tree)
     phytree.output_tree(inputfile, outtreetype)
 
 
     print "\n****************\nIMPUTATION\n****************\n\n"
     impute = Imputation(indata, phytree, mutrate, threshold, multi)
-    impute.impute(bootstrap)
+    impute.impute()
     impute.output_imputed(inputfile, outtype, impout)
 
 
