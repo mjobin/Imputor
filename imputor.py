@@ -179,8 +179,8 @@ class InData(object):
             diffs = [i for i in xrange(len(firstseq)) if firstseq[i] != seq_line[i]]
             curdiffs = []
             for diff_pos in diffs:
-                self.variantset.add(str(diff_pos)+seq_line[diff_pos])
-                curdiffs.append(str(diff_pos) + seq_line[diff_pos])
+                self.variantset.add(diff_pos)
+                curdiffs.append(diff_pos)
             self.variants[seq_line.name] = curdiffs
         return
 
@@ -196,7 +196,7 @@ class InData(object):
         print "Pruning non-segregating sites..."
         locs = []
         for curvar in self.variantset:
-            locs.append(int(curvar[:-1]))
+            locs.append(curvar)
         locs.sort()
 
         stripped = {}
@@ -253,7 +253,6 @@ class InData(object):
             if int(cols[self.vcf_pos]) > self.maxseqlength:
                 self.maxseqlength = int(cols[self.vcf_pos])
             self.orig_vcf_pos.append(cols[self.vcf_pos])
-            # self.variantset.add(str(var_count) + cols[self.vcf_alt])
             self.refset.add(str(var_count) + cols[self.vcf_ref])
             if (file_line[:1] == "#") or (cols[self.vcf_chrom] == '\n' or cols[self.vcf_info+1][:2] != "GT"):
                 continue
@@ -283,14 +282,12 @@ class InData(object):
                         genotype_sequence[changed_genotype_names[allele_pos]].append("N")
                     else:
                         genotype_sequence[changed_genotype_names[allele_pos]].append(alt_alleles[int(assigned_allele)-1])
-                        self.variantset.add(str(var_count) + alt_alleles[int(assigned_allele) - 1])
+                        self.variantset.add(var_count)
                         if changed_genotype_names[allele_pos] in self.variants:  # Keys added to self.variants here
-                            self.variants[changed_genotype_names[allele_pos]].append(  # to avoid empty entries
-                                str(var_count) + alt_alleles[int(assigned_allele) - 1])
+                            self.variants[changed_genotype_names[allele_pos]].append(var_count)
                         else:
                             self.variants[changed_genotype_names[allele_pos]] = []
-                            self.variants[changed_genotype_names[allele_pos]].append(
-                                str(var_count) + alt_alleles[int(assigned_allele) - 1])
+                            self.variants[changed_genotype_names[allele_pos]].append(var_count)
 
                 #Now dictionary of all genotype info
                 for fi in range(len(formatcols)):
@@ -635,11 +632,11 @@ class Imputation(object):
                 if verbose:
                     self.imputelist.append(newimpute)
                     if (self.bootreps[bootrep][0] / self.bootreps[bootrep][1] > (1 - self.threshold)):
-                        self.workseq[newimpute[0]][int(newimpute[1][:-1])] = newimpute[3]
+                        self.workseq[newimpute[0]][newimpute[1]] = newimpute[3]
                 else:
                      if(self.bootreps[bootrep][0]/self.bootreps[bootrep][1] > (1-self.threshold)):
                          self.imputelist.append(newimpute)
-                         self.workseq[newimpute[0]][int(newimpute[1][:-1])] = newimpute[3]
+                         self.workseq[newimpute[0]][newimpute[1]] = newimpute[3]
 
         else:
             Phylo.draw_ascii(self.phytree.tree)
@@ -650,7 +647,7 @@ class Imputation(object):
                 self.impute_threshold(term, self.phytree.tree, self.phytree.treeparents, neighbors)
             for newimpute in self.imputelist:
                 if newimpute[5] == "T":
-                    self.workseq[newimpute[0]][int(newimpute[1][:-1])] = newimpute[3]
+                    self.workseq[newimpute[0]][newimpute[1]] = newimpute[3]
         self.process_imputed()
 
     def impute_bootstrap(self, term, btree, bparents, neighbors):
@@ -697,7 +694,7 @@ class Imputation(object):
         print "Processing imputed sequences..."
         locs = []
         for curvar in indata.fullvariantset:
-            locs.append(int(curvar[:-1]))
+            locs.append(curvar)
         locs.sort()
 
         bar = progressbar.ProgressBar()
@@ -744,7 +741,7 @@ class Imputation(object):
             empty = []
             allkids = phytree.collect_all_kids(curparent, empty)
             for kid in allkids:
-                kidseq = self.workseq[str(kid)][int(curvar[:-1])]
+                kidseq = self.workseq[str(kid)][curvar]
                 if kid not in allneighbours and kidseq == origseq:
                     backmut = True
                 allneighbours.add(kid)
@@ -754,14 +751,13 @@ class Imputation(object):
     def detect_by_parsimony(self, term, tree, curvar, parents, neighbors):
 
         termname = str(term)
-        curvarnum = curvar[:-1]
-        finame = termname + "-" + curvarnum
+        finame = termname + "-" + str(curvar)
 
         nearest = set()
-        orig = self.workseq[str(term)][int(curvar[:-1])]
+        orig = self.workseq[str(term)][curvar]
 
         for neighbor in neighbors:
-            nearest.add(self.workseq[str(neighbor)][int(curvar[:-1])])
+            nearest.add(self.workseq[str(neighbor)][curvar])
 
         if len(nearest) > 1: # Cannot allow non-matching ever to impute sequence, thus this is first check
             return [termname, curvar, orig, ",".join(nearest), "Neighbors Non-matching", "F"]
@@ -774,7 +770,6 @@ class Imputation(object):
             elif only in self.missing:
                 return [termname, curvar, orig, only, "Neighbors All Missing", "F"]
             else:
-                print curvar
                 return [termname, curvar, orig, only, "Imputed Missing", "T"]
         else:
             if len(neighbors) < maxneighbors:
@@ -809,7 +804,7 @@ class Imputation(object):
 
         for imputed in self.imputelist:
             if indata.orig_vcf_pos:
-                imputed[1] = indata.orig_vcf_pos[int(imputed[1][:-1])]
+                imputed[1] = indata.orig_vcf_pos[imputed[1]]
 
         if verbose == True:
             if len(self.imputelist) > 0:
