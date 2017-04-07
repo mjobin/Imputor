@@ -573,15 +573,16 @@ class Imputation(object):
 
         """
         terms = self.phytree.tree.get_terminals()  # Get all internal nodes on tree. These are the ones with samples.
-        random.shuffle(terms)
-        for term in terms:
-            neighbors = phytree.collect_kids_rootward(term, self.phytree.treeparents, 0, maxheight, maxdepth,
-                                                      maxneighbors)
-            self.impute_threshold(term, self.phytree.treeparents, neighbors)
-        for newimpute in self.imputelist:
-            if newimpute[5] == "T":
-                self.indivimputes[newimpute[0]].append(newimpute[1])
-                self.workseq[newimpute[0]][newimpute[1]] = newimpute[3]
+        for i in range(passes):
+            random.shuffle(terms)
+            for term in terms:
+                neighbors = phytree.collect_kids_rootward(term, self.phytree.treeparents, 0, maxheight, maxdepth,
+                                                          maxneighbors)
+                self.impute_threshold(term, self.phytree.treeparents, neighbors)
+            for newimpute in self.imputelist:
+                if newimpute[5] == "T":
+                    self.indivimputes[newimpute[0]].append(newimpute[1])
+                    self.workseq[newimpute[0]][newimpute[1]] = newimpute[3]
         self.process_imputed()
 
     def impute_threshold(self, term, parents, neighbors):
@@ -672,7 +673,10 @@ class Imputation(object):
             nearest.add(self.workseq[str(neighbor)][curvar])
 
         if len(nearest) > 1:  # Cannot allow non-matching ever to impute sequence, thus this is first check
-            return [termname, curvar, orig, ",".join(nearest), "Neighbors Non-matching", "F"]
+            if mnm and orig in self.missing and len(nearest) == 2 and "N" in nearest:
+                nearest.remove("N") #Strip the one N, allowing imputation
+            else:
+                return [termname, curvar, orig, ",".join(nearest), "Neighbors Non-matching", "F"]
         if len(nearest) < 1:
             return [termname, curvar, orig, ".", "No neighbors", "F"]
         only = nearest.pop()
@@ -815,7 +819,9 @@ if __name__ == "__main__":
     parser.add_argument('-maxthreads', metavar='<maxthreads>', help='Maximum RAxML Pthreads.', default=4)
     parser.add_argument('-adthresh', metavar='<adthresh>', help='Threshold for Allelic Depth.', default=0.66)
     parser.add_argument('-mincoverage', metavar='<mincoverage>', help='Minimum coverage to ignore back mutation check.', default=1)
-    parser.add_argument('-passes', metavar='<passes>', help='Number of imputation passes.', default=3)
+    parser.add_argument('-passes', metavar='<passes>', help='Number of imputation passes.', default=1)
+    parser.add_argument('-mnm', dest='mnm', help='Impute missing when neighbors a missing/non-missing pair.', action='store_true')
+    parser.set_defaults(mnm=False)
 
 
 
@@ -845,6 +851,7 @@ if __name__ == "__main__":
     maxthreads = int(args.maxthreads)
     mincoverage = int(args.mincoverage)
     passes = int(args.passes)
+    mnm = bool(args.mnm)
 
 
     print "Working in" + os.getcwd() + " on " + inputfile + " using " + treetype
