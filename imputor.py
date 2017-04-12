@@ -101,6 +101,9 @@ class InData(object):
             outreffile = open(outreffilename, 'w')
             outreffile.write("".join(self.reflist))
             outreffile.close()
+        if rej:
+            self.rej_infile(inputfile)
+
 
         print "Finished input."
         return
@@ -319,6 +322,80 @@ class InData(object):
         self.fullsequence = self.sequence
         self.fullvariantset = self.variantset
         self.fullvariants = self.variants
+
+    def rej_infile(self, inputfile=None):
+        """ Outout a REJECTOR2 input file
+
+            Keyword arguments:
+            inputfile -- Input data. Accepted formats: FASTA, VCF.
+        """
+
+        filebase, fileext = os.path.splitext(inputfile)
+        rejfilename = filebase + "-rej.txt"
+
+        rejfile = open(rejfilename, 'w')
+        rejfile.write("/--Data\n")
+        rejfile.write("Vnaught 0\n\n")
+        rejfile.write("Loci\tDNA\n")
+        rejfile.write("Ancestral\t-1\n")
+        rejfile.write("RecombRt\t0\n")
+        rejfile.write("NumLoci\t1\n")
+        rejfile.write(str(len(self.sequence[0].seq)))
+        rejfile.write("\n")
+        rejfile.write("Length\t")
+        rejfile.write(str(len(self.sequence[0].seq)))
+        rejfile.write("\n")
+        rejfile.write("\n")
+
+        rejfile.write("Tag\t")
+        rejfile.write("Population\n")
+
+        outseq = {}
+        for seq in self.sequence:
+            outseq[seq.id] = str(seq.seq)
+        for x in sorted(outseq.keys()):
+            rejfile.write(str(x))
+            rejfile.write("\t")
+            rejfile.write("X")
+            rejfile.write("\t")
+            rejfile.write(outseq[x])
+            rejfile.write("\n")
+
+        rejfile.close()
+
+        # filebase, fileext = os.path.splitext(inputfile)
+        # rejfilename = filebase + "-rej.txt"
+        #
+        # rejfile = open(rejfilename, 'w')
+        # rejfile.write("/--Data\n")
+        # rejfile.write("Vnaught 0\n\n")
+        # rejfile.write("Loci\tSNP\n")
+        # rejfile.write("Ancestral\t-1\n")
+        # rejfile.write("RecombRt\t0\n")
+        # rejfile.write("NumLoci\t")
+        # rejfile.write(str(len(self.sequence[0].seq)))
+        # rejfile.write("\n")
+        # rejfile.write("Length\t1\n")
+        # rejfile.write("\n")
+        # rejfile.write("\n")
+        #
+        # rejfile.write("Tag\t")
+        # rejfile.write("Population\n")
+        #
+        # outseq = {}
+        # for seq in self.sequence:
+        #     outseq[seq.id] = str(seq.seq)
+        # for x in sorted(outseq.keys()):
+        #     rejfile.write(str(x))
+        #     rejfile.write("\t")
+        #     rejfile.write("X")
+        #     rejfile.write("\t")
+        #     for y in list(outseq[x]):
+        #         rejfile.write(y)
+        #         rejfile.write("\t")
+        #     rejfile.write("\n")
+        #
+        # rejfile.close()
 
 
 class PhyloTree(object):
@@ -578,14 +655,14 @@ class Imputation(object):
             for term in terms:
                 neighbors = phytree.collect_kids_rootward(term, self.phytree.treeparents, 0, maxheight, maxdepth,
                                                           maxneighbors)
-                self.impute_threshold(term, self.phytree.treeparents, neighbors)
+                self.impute_threshold(term, self.phytree.treeparents, neighbors, str(i+1))
             for newimpute in self.imputelist:
                 if newimpute[5] == "T":
                     self.indivimputes[newimpute[0]].append(newimpute[1])
                     self.workseq[newimpute[0]][newimpute[1]] = newimpute[3]
         self.process_imputed()
 
-    def impute_threshold(self, term, parents, neighbors):
+    def impute_threshold(self, term, parents, neighbors, thispass):
         """ Imputation on best tree.
 
             Keyword arguments:
@@ -596,6 +673,7 @@ class Imputation(object):
         """
         for curvar in self.indata.variantset:
             newimpute = self.detect_by_parsimony(term, curvar, parents, neighbors)
+            newimpute.append(thispass)
             if verbose:
                 self.imputelist.append(newimpute)
             else:
@@ -728,7 +806,7 @@ class Imputation(object):
         if verbose:
             if len(self.imputelist) > 0:
                 print "Imputed Mutations"
-                print "SUBJECTID | VAR | FROM | TO | TYPE | IMPUTED"
+                print "SUBJECTID | VAR | FROM | TO | TYPE | IMPUTED | PASS"
                 for imputed in self.imputelist:
                     print " | ".join(imputed)
                 print "\n"
@@ -738,7 +816,7 @@ class Imputation(object):
         if impout:
             impoutfilename = filebase + "-impout.txt"
             impoutfile = open(impoutfilename, 'w')
-            impoutfile.write("SUBJECTID\t VAR\t FROM\t TO\t TYPE\t IMPUTED\n")
+            impoutfile.write("SUBJECTID\t VAR\t FROM\t TO\t TYPE\t IMPUTED\tPASS\n")
             for imputed in self.imputelist:
                 impoutfile.write("\t".join(imputed))
                 impoutfile.write("\n")
@@ -776,7 +854,6 @@ class Imputation(object):
             outfile.close()
 
 
-                # SeqIO.write(self.imputedseq, outseqfile, "fasta")
 
 
 if __name__ == "__main__":
@@ -819,9 +896,11 @@ if __name__ == "__main__":
     parser.add_argument('-maxthreads', metavar='<maxthreads>', help='Maximum RAxML Pthreads.', default=4)
     parser.add_argument('-adthresh', metavar='<adthresh>', help='Threshold for Allelic Depth.', default=0.66)
     parser.add_argument('-mincoverage', metavar='<mincoverage>', help='Minimum coverage to ignore back mutation check.', default=1)
-    parser.add_argument('-passes', metavar='<passes>', help='Number of imputation passes.', default=1)
+    parser.add_argument('-passes', metavar='<passes>', help='Number of imputation passes.', default=3)
     parser.add_argument('-mnm', dest='mnm', help='Impute missing when neighbors a missing/non-missing pair.', action='store_true')
     parser.set_defaults(mnm=False)
+    parser.add_argument('-rej', dest='rej', help='Create data section of REJECOTR2 infile.', action='store_true')
+    parser.set_defaults(rej=False)
 
 
 
@@ -852,6 +931,7 @@ if __name__ == "__main__":
     mincoverage = int(args.mincoverage)
     passes = int(args.passes)
     mnm = bool(args.mnm)
+    rej = bool(args.rej)
 
 
     print "Working in" + os.getcwd() + " on " + inputfile + " using " + treetype
