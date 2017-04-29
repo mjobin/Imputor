@@ -11,7 +11,7 @@ import sys
 import random
 import glob
 # import time
-# import numpy
+import numpy
 import argparse
 from argparse import RawTextHelpFormatter
 import multiprocessing
@@ -435,20 +435,21 @@ class InData(object):
 
         bar = progressbar.ProgressBar()
         for i in bar(range(seqcount)):
-        # while len(self.sequence) < seqcount: #run until all sequence generated
-        #FIXME could do poisson for multiple events
-            x = rng.choice(genworkseq)
-            y = rng.randint(0, len(x)-1)
-            allmutations += 1
-            if rng.random()<idrate:
-                self.indel(x)
-            else:
-                z = self.snp(x[y], tstv)
-                if z == self.reflist[y]:
-                    reversions += 1
-                newx = list(x)
-                newx[y] = z
-            genworkseq.append(newx)
+            for j in range(0, numpy.random.poisson()):
+                x = rng.choice(genworkseq)
+                y = rng.randint(0, len(x)-1)
+                allmutations += 1
+                if rng.random()<idrate:
+                    self.indel(x)
+                else:
+                    z = self.snp(x[y], tstv)
+                    if z == self.reflist[y]:
+                        reversions += 1
+                    newx = list(x)
+                    newx[y] = z
+                genworkseq.append(newx)
+                if len(self.sequence) > seqcount:
+                    break
 
         self.sequence = MultipleSeqAlignment([])  # Blank the sequence to be worked on
         for gs in xrange(0, len(genworkseq)):
@@ -573,6 +574,7 @@ class PhyloTree(object):
             if height >= maxheight:
                 break
             curparent = parents[curnode]
+
             empty = []
             allkids = self.collect_kids(curparent, empty, 0, maxdepth)
             for kid in allkids:
@@ -641,8 +643,17 @@ class PhyloTree(object):
             raxml_glob = glob.glob('RAxML_*')
             for delfile in raxml_glob:
                 os.remove(delfile)
-        os.remove(tempfastafile)
-        # os.remove(reducedtempfastafile)
+
+
+        try:
+            os.remove(tempfastafile)
+        except OSError:
+            pass
+
+        try:
+            os.remove(reducedtempfastafile)
+        except OSError:
+            pass
 
     def phyml_tree(self, alpha=None):
         """ Constructs a tree via maximum likelihood by invoking external software PhyML.
@@ -681,20 +692,20 @@ class Imputation(object):
     """Imputation of mutations given input data and a phylogenetic tree.
     """
 
-    def __init__(self, indata, phytree, mutrate, threshold, multi):
+    def __init__(self, indata, phytree, mutrate, multi):
         self.cpucount = multiprocessing.cpu_count()
         self.workseq = {}
         self.imputedseq = MultipleSeqAlignment([])
         self.indata = indata
         self.phytree = phytree
         self.mu = mutrate
-        self.threshold = threshold
         self.imputelist = []
         self.reversionlist = []
         self.multi = multi
         self.acgt = {'A', 'C', 'G', 'T'}
         self.missing = {'.', '-', 'N'}
         self.indivimputes = {}
+        self.neighbors = {}
 
         for seq in indata.sequence:
             self.workseq[seq.name] = list(str(seq.seq))  # Begin with output sequence matching input
@@ -749,17 +760,30 @@ class Imputation(object):
             termname = str(term)
             neighbors = phytree.collect_kids_rootward(term, self.phytree.treeparents, 0, maxheight, maxdepth,
                                                       maxneighbors)
+
+            self.neighbors[term] = neighbors
+            if len(neighbors) < maxneighbors:
+                continue
             for curvar in self.indata.variantset:
                 orig = self.workseq[termname][curvar]
+                if orig in self.missing:
+                    continue
                 origvar = str(indata.orig_vcf_pos[curvar])
-                if self.backmutchk(term, self.phytree.treeparents, neighbors, curvar, orig):
-                    self.reversionlist.append([termname, origvar, orig,  "T"])
-                    backs += 1
-                else:
-                    self.reversionlist.append([termname, origvar, orig,  "F"])
-                all += 1
 
-
+                nearest = set()
+                for neighbor in neighbors:
+                    nearest.add(self.workseq[str(neighbor)][curvar])
+                if len(nearest) == 1:
+                    only = nearest.pop()
+                    if only in self.missing or orig == only:
+                        continue
+                    if self.backmutchk(term, self.phytree.treeparents, neighbors, curvar, orig):
+                        self.reversionlist.append([termname, origvar, orig,  "T"])
+                        backs += 1
+                    else:
+                        self.reversionlist.append([termname, origvar, orig,  "F"])
+                    all += 1
+        print "Reversions: ", backs , " in ", all
 
     def process_imputed(self):
         print "Processing imputed sequences..."
@@ -814,6 +838,8 @@ class Imputation(object):
             allkids = phytree.collect_all_kids(curparent, empty)
             for kid in allkids:
                 kidseq = self.workseq[str(kid)][curvar]
+                if kidseq in self.missing:
+                    continue
                 if kid not in allneighbours and kidseq == origseq:
                     backmut = True
                 allneighbours.add(kid)
@@ -864,17 +890,21 @@ class Imputation(object):
                             thisad += float(a[1])
                         else:
                             otherad += float(a[1])
-                if not nobackmutchk and adtot > mincoverage:
-                    if not self.backmutchk(term, parents, neighbors, curvar, orig):
-                        return [termname, curvar, orig, only, "No Back Mutation", "F"]
-                if finame in indata.gqdict:
-                    if int(indata.gqdict.get(finame)) < genoqual:
-                        return [termname, curvar, orig, only, "Imputed by GQ", "T"]
-                if finame in indata.addict:
+                    if adtot < mincoverage:
+                        return [termname, curvar, orig, only, "Imputed by Min. Cov.", "T"]
                     if otherad > 0.0:
                         if thisad / otherad < adthresh:
                             return [termname, curvar, orig, only, "Imputed by AD", "T"]
-                return [termname, curvar, orig, only, "Imputed Non-missing", "T"]
+                if finame in indata.gqdict:
+                    if int(indata.gqdict.get(finame)) < genoqual:
+                        return [termname, curvar, orig, only, "Imputed by GQ", "T"]
+                if nobackmutchk:
+                    return [termname, curvar, orig, only, "Imputed Non-missing", "T"]
+                else:
+                    if self.backmutchk(term, parents, neighbors, curvar, orig):
+                        return [termname, curvar, orig, only, "Imputed Non-missing", "T"]
+                    else:
+                        return [termname, curvar, orig, only, "No Back Mutation", "F"]
             else:
                 return [termname, curvar, orig, only, "Matches Neighbors", "F"]
 
@@ -971,8 +1001,6 @@ if __name__ == "__main__":
     parser.add_argument('-wtobj', metavar='<wtobj>', help='Weights file.')
     parser.add_argument('-polyobj', metavar='<polyobj>', help='Polymorphisms file.')
     parser.add_argument('-mutrate', metavar='<mutrate>', help='Mutation rate.', default='8.71e-10')
-    parser.add_argument('-threshold', metavar='<threshold>', help='Acceptance threshold for imputation.',
-                        default='0.05')
     parser.add_argument('-tstv', metavar='<tstv>', help='Transition/travsersion ratio.', default='2.0')
     parser.add_argument('-out', metavar='<out>', help='Output file type: fasta or vcf', default='fasta')
     parser.add_argument('-impout', metavar='<impout>', help='Output list of imputed mutations', default=True)
@@ -985,8 +1013,8 @@ if __name__ == "__main__":
     parser.add_argument('-genoqual', metavar='<genoqual>', help='Genotype Quality threshold for VCF input.', default=30)
     parser.add_argument('-maxthreads', metavar='<maxthreads>', help='Maximum RAxML Pthreads.', default=4)
     parser.add_argument('-adthresh', metavar='<adthresh>', help='Threshold for Allelic Depth.', default=0.66)
-    parser.add_argument('-mincoverage', metavar='<mincoverage>', help='Minimum coverage to ignore back mutation check.', default=1)
-    parser.add_argument('-passes', metavar='<passes>', help='Number of imputation passes.', default=3)
+    parser.add_argument('-mincoverage', metavar='<mincoverage>', help='Minimum coverage to ignore back mutation check.', default=0)
+    parser.add_argument('-passes', metavar='<passes>', help='Number of imputation passes.', default=1)
     parser.add_argument('-mnm', dest='mnm', help='Impute missing when neighbors a missing/non-missing pair.', action='store_true')
     parser.set_defaults(mnm=False)
     parser.add_argument('-rej', dest='rej', help='Create data section of REJECTOR2 infile.', action='store_true')
@@ -1019,7 +1047,6 @@ if __name__ == "__main__":
     maxheight = int(args.maxheight)
     maxneighbors = int(args.maxneighbors)
     mutrate = float(args.mutrate)
-    threshold = float(args.threshold)
     tstv = float(args.tstv)
     outtype = args.out
     impout = args.impout
@@ -1059,6 +1086,7 @@ if __name__ == "__main__":
         for x in xrange(0,randbatch):
             batchlist.append("rand.zzz")
 
+    # revrates = []
 
     for infile in batchlist:
 
@@ -1092,11 +1120,16 @@ if __name__ == "__main__":
             Phylo.draw_ascii(phytree.tree)
             phytree.output_tree(inputfile, outtreetype)
 
-        impute = Imputation(indata, phytree, mutrate, threshold, multi)
+        impute = Imputation(indata, phytree, mutrate, multi)
         impute.impute()
+
 
         print "\n****************\nIMPUTATION\n****************\n\n"
         impute.output_imputed(inputfile, outtype, impout)
+        # for i in impute.neighbors.keys():
+        #     print i, ": ", impute.neighbors[i]
+
+
 
 
 
