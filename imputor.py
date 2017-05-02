@@ -505,15 +505,16 @@ class PhyloTree(object):
             outtreetype -- format of tree file for output
         """
         filebase, fileext = os.path.splitext(inputfile)
-        if outtreetype == 'newick':
-            outfile = filebase + "-outtree.newick"
-            Phylo.write(self.tree, outfile, "newick")
+        if outtreetype == 'phyloxml':
+            outfile = filebase + "-outtree.xml"
+            Phylo.write(self.tree, outfile, "phyloxml")
         elif outtreetype == 'nexus':
             outfile = filebase + "-outtree.nexus"
             Phylo.write(self.tree, outfile, "nexus")
-        else:  # Default Phyloxml
-            outfile = filebase + "-outtree.xml"
-            Phylo.write(self.tree, outfile, "phyloxml")
+        else:  # Default newick
+            outfile = filebase + "-outtree.newick"
+            Phylo.write(self.tree, outfile, "newick")
+
 
     @staticmethod
     def all_parents(tree):
@@ -805,6 +806,8 @@ class Imputation(object):
             seqrec = SeqRecord(Seq("".join(tmpseq)), id=fullseq.id, name=fullseq.id)
             self.imputedseq.append(seqrec)
 
+
+
         self.imputedseq.sort()
 
     @staticmethod
@@ -912,7 +915,9 @@ class Imputation(object):
 
         for imputed in self.imputelist:
             if indata.orig_vcf_pos:
-                imputed[1] = indata.orig_vcf_pos[imputed[1]]
+                imputed[1] = str(indata.orig_vcf_pos[imputed[1]])
+            else:
+                imputed[1] = str(imputed[1])
 
         if verbose:
             if len(self.imputelist) > 0:
