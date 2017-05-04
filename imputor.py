@@ -455,7 +455,7 @@ class InData(object):
         for gs in xrange(0, len(genworkseq)):
             self.sequence.append(SeqRecord(Seq(''.join(genworkseq[gs])), name=str(gs), id=str(gs)))
 
-        self.revrate = float(reversions) / float(allmutations)
+        # self.revrate = float(reversions) / float(allmutations)
 
 
 class PhyloTree(object):
@@ -991,7 +991,7 @@ if __name__ == "__main__":
     parser.add_argument('-file', metavar='<file>', help='input file: FASTA or VCF')
     parser.add_argument('-tree', metavar='<tree>', help='tree type; <treefilename.xml>, pars, RAxML, PhyML',
                         default='RAxML')
-    parser.add_argument('-outtree', metavar='<outtree>', help='Output format for tree', default='phyloxml')
+    parser.add_argument('-outtree', metavar='<outtree>', help='Output format for tree', default='newick')
     parser.add_argument('-alpha', metavar='<alpha>', help='Value of gamma shape parameter.', default='e')
     parser.add_argument('-rmodel', metavar='<rmodel>', help='Model type for RaXML.', default='GTRCAT')
     parser.add_argument('-maxheight', metavar='<maxheight>',
@@ -1123,7 +1123,7 @@ if __name__ == "__main__":
 
             print "\n****************\nTREE\n****************\n\n"
             Phylo.draw_ascii(phytree.tree)
-            phytree.output_tree(inputfile, outtreetype)
+        phytree.output_tree(inputfile, outtreetype)
 
         impute = Imputation(indata, phytree, mutrate, multi)
         impute.impute()
