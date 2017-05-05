@@ -630,7 +630,13 @@ class PhyloTree(object):
             Phylo.write(self.starttree, raxmlstarttreename, "newick")
             raxml_args["starting_tree"] = raxmlstarttreename
 
-        raxml_cline = RaxmlCommandline(**raxml_args)
+        raxml_cline = ""
+        if exlocal:
+            raxml_cline = RaxmlCommandline(cmd='./raxmlHPC', **raxml_args)
+        else:
+            raxml_cline = RaxmlCommandline(**raxml_args)
+
+
 
         print "Invoking RAxML with ", raxml_cline
 
@@ -1026,6 +1032,8 @@ if __name__ == "__main__":
     parser.set_defaults(mnm=False)
     parser.add_argument('-rej', dest='rej', help='Create data section of REJECTOR2 infile.', action='store_true')
     parser.set_defaults(rej=False)
+    parser.add_argument('-exlocal', dest='exlocal', help='Invoke external programs in local directory.', action='store_true')
+    parser.set_defaults(local=False)
 
     #BATCH and RANDOM switches
     parser.add_argument('-seqlength', metavar='<seqlength>',
@@ -1074,6 +1082,7 @@ if __name__ == "__main__":
     idsize = int(args.indelsize)
     idrate = float(args.indelrate)
     randbatch = int(args.randbatch)
+    exlocal = bool(args.exlocal)
 
 
 
