@@ -488,6 +488,8 @@ class PhyloTree(object):
 
         if self.treetype[-3:] == 'xml':
             self.tree = Phylo.read(self.treetype, "phyloxml")
+        elif self.treetype[-3:] == 'nwk':
+            self.tree = Phylo.read(self.treetype, "newick")
         elif self.treetype == 'pars':
             self.parsimony_tree()
         elif self.treetype == 'RAxML':
