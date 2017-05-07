@@ -6,24 +6,22 @@
     Author - Matthew Jobin
     """
 
-import os
-import sys
-import random
-import glob
-# import time
-import numpy
 import argparse
-from argparse import RawTextHelpFormatter
+import glob
 import multiprocessing
+import os
+import random
+import sys
+from argparse import RawTextHelpFormatter
+
+import progressbar
 from Bio import AlignIO
-from Bio.Phylo.TreeConstruction import *
 from Bio import Phylo
 from Bio.Phylo.Applications import PhymlCommandline
 from Bio.Phylo.Applications import RaxmlCommandline
+from Bio.Phylo.TreeConstruction import *
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
-from Bio.Align import MultipleSeqAlignment
-import progressbar
 
 
 class InData(object):
@@ -49,7 +47,6 @@ class InData(object):
         self.maxseqlength = 0
         self.revrate = -1
 
-
         # The eight mandatory columns of a VCF file. Here for clarity in functions below.
         self.vcf_chrom = 0
         self.vcf_pos = 1
@@ -71,7 +68,6 @@ class InData(object):
             inputfile -- Input data. Accepted formats: FASTA, VCF.
         """
 
-
         filebase, fileext = os.path.splitext(inputfile)
         self.filebase = filebase
         if inputfile[-5:] == 'fasta':
@@ -90,7 +86,8 @@ class InData(object):
             # Generate sequence from only those areas with any polymorphism
             self.seq_from_variants_excl(raw_data)
         else:
-            self.genseq()
+            print "Input file must be either .fasta or .vcf"
+            exit()
 
         if verbose:
             outseqfile = filebase + "-indata.fasta"
@@ -114,7 +111,6 @@ class InData(object):
             outreffile.close()
         if rej:
             self.rej_infile(inputfile)
-
 
         print "Finished input."
         return
@@ -375,94 +371,15 @@ class InData(object):
 
         rejfile.close()
 
-    def snp(self, x, tstv):
-
-        ts = True
-        if random.random() < (1.0 / (tstv + 1.0)):
-            ts = False
-        if x == "A":
-            if ts:
-                return "G"
-            else:
-                if random.random() < 0.5:
-                    return "C"
-                else:
-                    return "T"
-        if x == "G":
-            if ts:
-                return "A"
-            else:
-                if random.random() < 0.5:
-                    return "C"
-                else:
-                    return "T"
-        if x == "C":
-            if ts:
-                return "T"
-            else:
-                if random.random() < 0.5:
-                    return "A"
-                else:
-                    return "G"
-        if x == "T":
-            if ts:
-                return "C"
-            else:
-                if random.random() < 0.5:
-                    return "A"
-                else:
-                    return "G"
-        return "-"
-
-    def indel(self, x, y):
-        if indel < 0:
-            for i in range(indel, 0):
-                del x[y]
-        elif indel > 0:
-            insb = []
-            for i in range(0, indel):
-                insb.append(rng.randint(0, 3))
-            x.insert(y, insb)
-
-    def genseq(self):
-        genworkseq = []
-        for x in xrange(0, seqlength):
-            self.reflist.append(self.acgt[rng.randint(0, 3)])
-        genworkseq.append(self.reflist)
-
-        reversions = 0
-        allmutations = 0
-
-        bar = progressbar.ProgressBar()
-        for i in bar(range(seqcount)):
-            for j in range(0, numpy.random.poisson()):
-                x = rng.choice(genworkseq)
-                y = rng.randint(0, len(x)-1)
-                allmutations += 1
-                if rng.random()<idrate:
-                    self.indel(x)
-                else:
-                    z = self.snp(x[y], tstv)
-                    if z == self.reflist[y]:
-                        reversions += 1
-                    newx = list(x)
-                    newx[y] = z
-                genworkseq.append(newx)
-                if len(self.sequence) > seqcount:
-                    break
-
-        self.sequence = MultipleSeqAlignment([])  # Blank the sequence to be worked on
-        for gs in xrange(0, len(genworkseq)):
-            self.sequence.append(SeqRecord(Seq(''.join(genworkseq[gs])), name=str(gs), id=str(gs)))
-
-        # self.revrate = float(reversions) / float(allmutations)
-
 
 class PhyloTree(object):
     """A phylogenetic tree either input from phyloxml format or constructed from sequence
     """
 
     def __init__(self):
+        self.impname = None
+        self.starttreename = None
+        self.treetype = treetype
         self.tree = None  # Phylogenetic tree to be loaded or constructed from data. Newick format.
         self.treeparents = {}
         self.starttree = None  # Phylogenetic tree used as starting tree in RAxML
@@ -474,9 +391,8 @@ class PhyloTree(object):
             treetype -- type of tree to be input or constructed
         """
 
-        self.treetype = treetype
-        self.starttreename = starttreename
         self.impname = "imp" + str(timestamp)
+        self.starttreename = starttreename
 
         if self.starttreename:
             if self.starttreename[-3:] == 'xml':
@@ -516,7 +432,6 @@ class PhyloTree(object):
         else:  # Default newick
             outfile = filebase + "-outtree.newick"
             Phylo.write(self.tree, outfile, "newick")
-
 
     @staticmethod
     def all_parents(tree):
@@ -620,7 +535,6 @@ class PhyloTree(object):
         tempfastafile = indata.filebase + self.impname + "_fastatmp.fasta"
         reducedtempfastafile = indata.filebase + self.impname + "_fastatmp.fasta.reduced"
         AlignIO.write(indata.sequence, tempfastafile, "fasta")
-        rng = random.SystemRandom()  # Uses /dev/urandom
 
         raxml_args = {"sequences": tempfastafile, "model": rmodel, "name": self.impname,
                       "parsimony_seed": rng.randint(0, sys.maxint), "threads": cpus}
@@ -636,8 +550,6 @@ class PhyloTree(object):
         else:
             raxml_cline = RaxmlCommandline(**raxml_args)
 
-
-
         print "Invoking RAxML with ", raxml_cline
 
         out_log, err_log = raxml_cline()
@@ -652,7 +564,6 @@ class PhyloTree(object):
             raxml_glob = glob.glob('RAxML_*')
             for delfile in raxml_glob:
                 os.remove(delfile)
-
 
         try:
             os.remove(tempfastafile)
@@ -682,7 +593,12 @@ class PhyloTree(object):
             Phylo.write(self.starttree, phystarttreename, "newick")
             phyml_args["input_tree"] = phystarttreename
 
-        cmdline = PhymlCommandline(**phyml_args)
+        cmdline = ""
+        if exlocal:
+            cmdline = PhymlCommandline(cmd='./PhyML', **phyml_args)
+        else:
+            cmdline = PhymlCommandline(**phyml_args)
+
         print "Commandline for PhyML: " + str(cmdline)
         out_log, err_log = cmdline()
         if verbose:
@@ -721,7 +637,7 @@ class Imputation(object):
             self.indivimputes[seq.name] = []
 
     def impute(self):
-        """ Sets up multiprocessing of imputation function for all terminal nodes.
+        """ Sets up imputation function for all terminal nodes.
 
             Keyword arguments:
             imputetype -- Type of search used to locate possible sites to impute.
@@ -731,11 +647,15 @@ class Imputation(object):
         """
         terms = self.phytree.tree.get_terminals()  # Get all internal nodes on tree. These are the ones with samples.
         for i in range(passes):
+            print "\nPass", i
             random.shuffle(terms)
-            for term in terms:
+            bar = progressbar.ProgressBar()
+            for p in bar(range(len(terms))):
+                # for term in terms:
+                term = terms[p]
                 neighbors = phytree.collect_kids_rootward(term, self.phytree.treeparents, 0, maxheight, maxdepth,
                                                           maxneighbors)
-                self.impute_threshold(term, self.phytree.treeparents, neighbors, str(i+1))
+                self.impute_threshold(term, self.phytree.treeparents, neighbors, str(i + 1))
             for newimpute in self.imputelist:
                 if newimpute[5] == "T":
                     self.indivimputes[newimpute[0]].append(newimpute[1])
@@ -763,8 +683,8 @@ class Imputation(object):
     def backmutscan(self):
         terms = self.phytree.tree.get_terminals()
         random.shuffle(terms)
-        backs = 0
-        all = 0
+        backmuts = 0
+        allmuts = 0
         for term in terms:
             termname = str(term)
             neighbors = phytree.collect_kids_rootward(term, self.phytree.treeparents, 0, maxheight, maxdepth,
@@ -787,15 +707,15 @@ class Imputation(object):
                     if only in self.missing or orig == only:
                         continue
                     if self.backmutchk(term, self.phytree.treeparents, neighbors, curvar, orig):
-                        self.reversionlist.append([termname, origvar, orig,  "T"])
-                        backs += 1
+                        self.reversionlist.append([termname, origvar, orig, "T"])
+                        backmuts += 1
                     else:
-                        self.reversionlist.append([termname, origvar, orig,  "F"])
-                    all += 1
-        print "Reversions: ", backs , " in ", all
+                        self.reversionlist.append([termname, origvar, orig, "F"])
+                    allmuts += 1
+        print "Reversions: ", backmuts, " in ", allmuts
 
     def process_imputed(self):
-        print "Processing imputed sequences..."
+        print "\nProcessing imputed sequences..."
         locs = []
         for curvar in indata.fullvariantset:
             locs.append(curvar)
@@ -813,8 +733,6 @@ class Imputation(object):
 
             seqrec = SeqRecord(Seq("".join(tmpseq)), id=fullseq.id, name=fullseq.id)
             self.imputedseq.append(seqrec)
-
-
 
         self.imputedseq.sort()
 
@@ -870,7 +788,7 @@ class Imputation(object):
 
         if len(nearest) > 1:  # Cannot allow non-matching ever to impute sequence, thus this is first check
             if mnm and orig in self.missing and len(nearest) == 2 and "N" in nearest:
-                nearest.remove("N") #Strip the one N, allowing imputation
+                nearest.remove("N")  # Strip the one N, allowing imputation
             else:
                 return [termname, curvar, orig, ",".join(nearest), "Neighbors Non-matching", "F"]
         if len(nearest) < 1:
@@ -957,7 +875,6 @@ class Imputation(object):
             revoutfile.write("\n")
         revoutfile.close()
 
-
         for indiv in self.indivimputes.keys():
             indivoutfile.write(indiv)
             indivoutfile.write("\t")
@@ -988,15 +905,15 @@ class Imputation(object):
             outfile.close()
 
 
-
 if __name__ == "__main__":
-    print "\n\n***IMPUTOR ***\n\n"
+
+    print "\n****************\nIMPUTOR\n****************\n"
 
     parser = argparse.ArgumentParser(description="IMPUTOR is a program for the phylogeny-aware imputation of: \n\n\t" \
                                                  "mutations.\n\t" \
                                                  "- ", formatter_class=RawTextHelpFormatter)
 
-    parser.add_argument('-file', metavar='<file>', help='input file: FASTA or VCF')
+    parser.add_argument('-file', metavar='<file>', help='input file: FASTA or VCF', required=True)
     parser.add_argument('-tree', metavar='<tree>', help='tree type; <treefilename.xml>, pars, RAxML, PhyML',
                         default='RAxML')
     parser.add_argument('-outtree', metavar='<outtree>', help='Output format for tree', default='newick')
@@ -1026,16 +943,19 @@ if __name__ == "__main__":
     parser.add_argument('-genoqual', metavar='<genoqual>', help='Genotype Quality threshold for VCF input.', default=30)
     parser.add_argument('-maxthreads', metavar='<maxthreads>', help='Maximum RAxML Pthreads.', default=4)
     parser.add_argument('-adthresh', metavar='<adthresh>', help='Threshold for Allelic Depth.', default=0.66)
-    parser.add_argument('-mincoverage', metavar='<mincoverage>', help='Minimum coverage to ignore back mutation check.', default=0)
+    parser.add_argument('-mincoverage', metavar='<mincoverage>', help='Minimum coverage to ignore back mutation check.',
+                        default=0)
     parser.add_argument('-passes', metavar='<passes>', help='Number of imputation passes.', default=1)
-    parser.add_argument('-mnm', dest='mnm', help='Impute missing when neighbors a missing/non-missing pair.', action='store_true')
+    parser.add_argument('-mnm', dest='mnm', help='Impute missing when neighbors a missing/non-missing pair.',
+                        action='store_true')
     parser.set_defaults(mnm=False)
     parser.add_argument('-rej', dest='rej', help='Create data section of REJECTOR2 infile.', action='store_true')
     parser.set_defaults(rej=False)
-    parser.add_argument('-exlocal', dest='exlocal', help='Invoke external programs in local directory.', action='store_true')
+    parser.add_argument('-exlocal', dest='exlocal', help='Invoke external programs in local directory.',
+                        action='store_true')
     parser.set_defaults(local=False)
 
-    #BATCH and RANDOM switches
+    # BATCH and RANDOM switches
     parser.add_argument('-seqlength', metavar='<seqlength>',
                         help='Length of randomly generated sequence.', default=1000)
     parser.add_argument('-seqcount', metavar='<seqcount>',
@@ -1046,8 +966,6 @@ if __name__ == "__main__":
     parser.add_argument('-indelrate', metavar='<indelrate>', help='Indel rate.', default=0.0)
     parser.add_argument('-randbatch', metavar='<randbatch>',
                         help='Number of times to run with randomly generated input.', default=100)
-
-
 
     args = parser.parse_args()
     inputfile = args.file
@@ -1076,44 +994,40 @@ if __name__ == "__main__":
     passes = int(args.passes)
     mnm = bool(args.mnm)
     rej = bool(args.rej)
-    seqlength = int(args.seqlength)
-    seqcount = int(args.seqcount)
     seqonly = bool(args.seqonly)
     idsize = int(args.indelsize)
-    idrate = float(args.indelrate)
-    randbatch = int(args.randbatch)
     exlocal = bool(args.exlocal)
-
-
 
     rng = random.SystemRandom()  # Uses /dev/urandom
 
     batchlist = []
-    if inputfile:
-        if os.path.isdir(inputfile):
-            for bfile in os.listdir(inputfile):
-                if bfile.endswith(".fasta"):
-                    batchlist.append(inputfile+"/"+bfile)
-                elif bfile.endswith(".vcf"):
-                    batchlist.append(inputfile+"/"+bfile)
-        elif os.path.isfile(inputfile):
-            batchlist.append(inputfile)
-    else:
-        for x in xrange(0,randbatch):
-            batchlist.append("rand.zzz")
 
-    # revrates = []
+    if os.path.isdir(inputfile):
+        for bfile in os.listdir(inputfile):
+            if bfile.endswith(".fasta"):
+                batchlist.append(inputfile + "/" + bfile)
+            elif bfile.endswith(".vcf"):
+                batchlist.append(inputfile + "/" + bfile)
+    elif os.path.isfile(inputfile):
+        if inputfile.endswith(".fasta"):
+            batchlist.append(inputfile)
+        elif inputfile.endswith(".vcf"):
+            batchlist.append(inputfile)
+        else:
+            print "Input file must be either .fasta or .vcf"
+            exit()
+    else:
+        print "Input file(s) not found. Exiting."
+        exit()
 
     for infile in batchlist:
-
         randstamp = rng.getrandbits(32)
-        print "\n\n****************\n", infile,"\n****************"
+        print "\n\n****************\nInput file:", infile, "\n****************"
         print "Unique stamp for temp files: ", randstamp
 
         indata = InData()
         indata.load_input_data(inputfile=infile)
 
-        # revrates.append(indata.revrate)
         if seqonly:
             continue
 
@@ -1122,40 +1036,22 @@ if __name__ == "__main__":
                            timestamp=randstamp,
                            maxthreads=maxthreads)
 
-
-
         if verbose:
-            print "\n****************\nVARIANTS\n****************\n\n"
+            print "\n****************\nVARIANTS\n****************\n"
             for i in indata.variants.keys():
                 print i + ": " + str(indata.variants[i])
 
-            print "\n****************\nSEQUENCE\n****************\n\n"
+            print "\n****************\nSEQUENCE\n****************\n"
             print indata.sequence
 
-            print "\n****************\nTREE\n****************\n\n"
+            print "\n****************\nTREE\n****************\n"
             Phylo.draw_ascii(phytree.tree)
         phytree.output_tree(inputfile, outtreetype)
 
+        print "\n****************\nIMPUTATION\n****************\n"
         impute = Imputation(indata, phytree, mutrate, multi)
         impute.impute()
-
-
-        print "\n****************\nIMPUTATION\n****************\n\n"
         impute.output_imputed(inputfile, outtype, impout)
-        # for i in impute.neighbors.keys():
-        #     print i, ": ", impute.neighbors[i]
-
-
-
-
-
-
-
-
-
-
-
-
 
 else:
     print("IMPUTOR is being imported into another module. Not yet implemented.")

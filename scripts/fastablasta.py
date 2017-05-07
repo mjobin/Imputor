@@ -64,8 +64,7 @@ parser.add_argument('-tstv', metavar='<tstv>', help='Transition/travsersion rati
 parser.add_argument('-infile', metavar='<infile>', help='FASTA input file.')
 parser.add_argument('-indelsize', metavar='<indelsize>', help='Max indel size', default=0)
 parser.add_argument('-indelrate', metavar='<indelrate>', help='Indel rate.', default=0.0)
-parser.add_argument('-skew', metavar='<skew>', help='Skew towards REF calls.', default=0.0)
-
+parser.add_argument('-copyrate', metavar='<copyrate>', help='Copy rate.', default=0.01)
 
 
 args = parser.parse_args()
@@ -79,7 +78,6 @@ tstv = float(args.tstv)
 infile = args.infile
 idsize = int(args.indelsize)
 idrate = float(args.indelrate)
-skew = float(args.skew)
 
 acgt = {'A', 'C', 'G', 'T'}
 missing = {'.', '-', 'N'}
@@ -133,20 +131,10 @@ for seq in workseqs:
 			out_line.append("-")
 			missed = missed + 1
 		elif random.random() < mu:
-			x = mutit(seq_line[i],tstv)
-			print x, " ", str(ref[i])
-			if seq_line[i] == ref[i]:
-				if random.random() < skew:
-					out_line.append(x)
-				else:
-					out_line.append(seq_line[i])
-			else:
-				out_line.append(x)
+			out_line.append(mutit(seq_line[i],tstv))
 		else:
 			out_line.append(seq_line[i])
 		tot = tot +1
-	print "miss: ", missed
-	print "tot: ", tot
 	for i in xrange(len(out_line)):
 		if random.random() < idrate:
 			indel = random.randint(-idsize, idsize)
