@@ -3,7 +3,7 @@
 """ Imputor - software for imputing missing mutations in sequencing data by the use
     of phylogenetic trees.
     
-    Author - Matthew Jobin
+    Author - Matthew Jobin, Department of Anthropology, Santa Clara University
     """
 
 import argparse
@@ -12,6 +12,7 @@ import multiprocessing
 import os
 import random
 import sys
+import re
 from argparse import RawTextHelpFormatter
 
 import progressbar
@@ -78,7 +79,8 @@ class InData(object):
             file_data = open(inputfile, 'r')
             raw_data = []
             for file_line in file_data:
-                raw_data.append(file_line.rstrip())
+                if len(file_line.rstrip()) > 0:  # Strip blank lines
+                    raw_data.append(file_line.rstrip())
 
             # Split multi-allelic sites
             expanded_file_data = self.vcf_expand_multi_allele(raw_data)
@@ -123,9 +125,11 @@ class InData(object):
         """
         expanded_file_data = []
         print "\nExpanding multi-allele entries..."
+
         bar = progressbar.ProgressBar(redirect_stdout=True)
         for i in bar(range(len(in_data))):
             file_line = in_data[i]
+
             cols = file_line.split('\t')
 
             # If the second character is a (meta-info line) or a blank line, ignore
@@ -252,7 +256,6 @@ class InData(object):
         bar = progressbar.ProgressBar()
         for i in bar(range(len(snps_data))):
             file_line = snps_data[i]
-            # For file_line in snps_data:
             cols = file_line.split('\t')
             if int(cols[self.vcf_pos]) > self.maxseqlength:
                 self.maxseqlength = int(cols[self.vcf_pos])
@@ -266,12 +269,13 @@ class InData(object):
             for position, indiv_genotype in enumerate(
                     indiv_genotypes):  # Iterates through that row of genotypes for this site
                 genotypecols = indiv_genotype.split(":")
-                assigned_alleles = genotypecols[0].split(  # VCF standard GT always first column
-                    "[/|]+")  # Split genotype entry on either character phased or unphased
+                assigned_alleles = re.split(  # VCF standard GT always first column
+                    "[/|]+", genotypecols[0])  # Split genotype entry on either character phased or unphased
                 changed_genotype_names = []
                 for allele_pos, assigned_allele in enumerate(assigned_alleles):  # Iterates through the alleles
                     changed_genotype_name = genotype_names[position]
                     if len(assigned_alleles) > 1:  # Only append to genotype name if not haploid
+                        changed_genotype_name += "-"
                         changed_genotype_name += str(allele_pos)
                     changed_genotype_names.append(changed_genotype_name)
                 for changed_genotype_name in changed_genotype_names:
@@ -376,10 +380,11 @@ class PhyloTree(object):
     """A phylogenetic tree either input from phyloxml format or constructed from sequence
     """
 
-    def __init__(self):
+    def __init__(self, indata):
+        self.indata = indata
         self.impname = None
         self.starttreename = None
-        self.treetype = treetype
+        self.treetype = None
         self.tree = None  # Phylogenetic tree to be loaded or constructed from data. Newick format.
         self.treeparents = {}
         self.starttree = None  # Phylogenetic tree used as starting tree in RAxML
@@ -390,7 +395,7 @@ class PhyloTree(object):
             Keyword arguments:
             treetype -- type of tree to be input or constructed
         """
-
+        self.treetype = treetype
         self.impname = "imp" + str(timestamp)
         self.starttreename = starttreename
 
@@ -509,10 +514,58 @@ class PhyloTree(object):
 
         """
         print "Generating maximum parsimony tree.."
-        scorer = ParsimonyScorer()
-        searcher = NNITreeSearcher(scorer)
-        constructor = ParsimonyTreeConstructor(searcher)
-        self.tree = constructor.build_tree(indata.sequence)
+        cpus = multiprocessing.cpu_count()
+        if cpus > maxthreads:
+            cpus = maxthreads
+
+        # Erase RaXML intermediate files from previous runs
+        raxml_glob = glob.glob('RAxML_*')
+        for delfile in raxml_glob:
+            os.remove(delfile)
+
+        # Output sequence to a temp FASTA file
+        tempfastafile = self.indata.filebase + self.impname + "_fastatmp.fasta"
+        reducedtempfastafile = self.indata.filebase + self.impname + "_fastatmp.fasta.reduced"
+        AlignIO.write(self.indata.sequence, tempfastafile, "fasta")
+
+        raxml_args = {"sequences": tempfastafile, "model": rmodel, "name": self.impname,
+                      "parsimony_seed": rng.randint(0, sys.maxint), "threads": cpus, "parsimony": True}
+
+        raxmlstarttreename = "RAxML_" + self.impname + "_starttree.newick"
+        if self.starttree:
+            Phylo.write(self.starttree, raxmlstarttreename, "newick")
+            raxml_args["starting_tree"] = raxmlstarttreename
+
+        raxml_cline = ""
+        if exlocal:
+            raxml_cline = RaxmlCommandline(cmd='./raxmlHPC', **raxml_args)
+        else:
+            raxml_cline = RaxmlCommandline(**raxml_args)
+
+        print "Invoking RAxML with ", raxml_cline
+
+        out_log, err_log = raxml_cline()
+        if verbose:
+            print err_log
+            print out_log
+        raxmlparstreename = "RAxML_parsimonyTree." + self.impname
+        self.tree = Phylo.read(raxmlparstreename, "newick")
+
+        # Erase RaXML intermediate files
+        if not verbose:
+            raxml_glob = glob.glob('RAxML_*')
+            for delfile in raxml_glob:
+                os.remove(delfile)
+
+        try:
+            os.remove(tempfastafile)
+        except OSError:
+            pass
+
+        try:
+            os.remove(reducedtempfastafile)
+        except OSError:
+            pass
 
     def raxml_tree(self, rmodel=None):
         """ Constructs a tree via maximum likelihood by invoking external software RAxML.
@@ -532,9 +585,9 @@ class PhyloTree(object):
             os.remove(delfile)
 
         # Output sequence to a temp FASTA file
-        tempfastafile = indata.filebase + self.impname + "_fastatmp.fasta"
-        reducedtempfastafile = indata.filebase + self.impname + "_fastatmp.fasta.reduced"
-        AlignIO.write(indata.sequence, tempfastafile, "fasta")
+        tempfastafile = self.indata.filebase + self.impname + "_fastatmp.fasta"
+        reducedtempfastafile = self.indata.filebase + self.impname + "_fastatmp.fasta.reduced"
+        AlignIO.write(self.indata.sequence, tempfastafile, "fasta")
 
         raxml_args = {"sequences": tempfastafile, "model": rmodel, "name": self.impname,
                       "parsimony_seed": rng.randint(0, sys.maxint), "threads": cpus}
@@ -582,9 +635,9 @@ class PhyloTree(object):
         """
         print "Invoking PhyML..."
         # Output sequence to a temp FASTA file
-        tempfastafile = indata.filebase + "_" + self.impname + "_fastatmp.fasta"
-        AlignIO.write(indata.sequence, tempfastafile, "fasta")
-        tempphyfile = indata.filebase + "_" + self.impname + "_phytmp.phy"
+        tempfastafile = self.indata.filebase + "_" + self.impname + "_fastatmp.fasta"
+        AlignIO.write(self.indata.sequence, tempfastafile, "fasta")
+        tempphyfile = self.indata.filebase + "_" + self.impname + "_phytmp.phy"
         AlignIO.convert(tempfastafile, "fasta", tempphyfile, "phylip-relaxed")
 
         phyml_args = {"input": tempphyfile, "alpha": "e"}
@@ -607,7 +660,7 @@ class PhyloTree(object):
         phytreefile = tempphyfile + "_phyml_tree.txt"
         self.tree = Phylo.read(phytreefile, "newick")
         if not verbose:
-            phyml_globname = indata.filebase + "_" + self.impname + "*"
+            phyml_globname = self.indata.filebase + "_" + self.impname + "*"
             phyml_glob = glob.glob(phyml_globname)
             for delfile in phyml_glob:
                 os.remove(delfile)
@@ -631,6 +684,7 @@ class Imputation(object):
         self.missing = {'.', '-', 'N'}
         self.indivimputes = {}
         self.neighbors = {}
+        self.missinglist = {}
 
         for seq in indata.sequence:
             self.workseq[seq.name] = list(str(seq.seq))  # Begin with output sequence matching input
@@ -645,6 +699,7 @@ class Imputation(object):
             neighbors -- Minimum number of identical non-missing neighbors in order to impute.
 
         """
+
         terms = self.phytree.tree.get_terminals()  # Get all internal nodes on tree. These are the ones with samples.
         for i in range(passes):
             print "\nPass", i
@@ -822,7 +877,7 @@ class Imputation(object):
                     if adtot < mincoverage:
                         return [termname, curvar, orig, only, "Imputed by Min. Cov.", "T"]
                     if otherad > 0.0:
-                        if thisad / otherad < adthresh:
+                        if thisad / otherad <= adthresh:
                             return [termname, curvar, orig, only, "Imputed by AD", "T"]
                 if finame in indata.gqdict:
                     if int(indata.gqdict.get(finame)) < genoqual:
@@ -904,6 +959,12 @@ class Imputation(object):
                 outfile.write("\n")
             outfile.close()
 
+    def makemissinglist(self):
+        self.missinglist = {}
+        for seqname in self.workseq.keys():
+            miss = [i for i in xrange(len(self.workseq[seqname])) if self.workseq[seqname][i] in self.missing]
+            self.missinglist[seqname] = float(len(miss)) / float(len(self.workseq[seqname]))
+
 
 if __name__ == "__main__":
 
@@ -927,9 +988,6 @@ if __name__ == "__main__":
     parser.add_argument('-maxneighbors', metavar='<maxneighbors>',
                         help='Number of neighbors that must be identical in order to impute.',
                         default=3)
-    parser.add_argument('-hapobj', metavar='<hapobj>', help='Haplogroups file.')
-    parser.add_argument('-wtobj', metavar='<wtobj>', help='Weights file.')
-    parser.add_argument('-polyobj', metavar='<polyobj>', help='Polymorphisms file.')
     parser.add_argument('-mutrate', metavar='<mutrate>', help='Mutation rate.', default='8.71e-10')
     parser.add_argument('-tstv', metavar='<tstv>', help='Transition/travsersion ratio.', default='2.0')
     parser.add_argument('-out', metavar='<out>', help='Output file type: fasta or vcf', default='fasta')
@@ -954,18 +1012,8 @@ if __name__ == "__main__":
     parser.add_argument('-exlocal', dest='exlocal', help='Invoke external programs in local directory.',
                         action='store_true')
     parser.set_defaults(local=False)
-
-    # BATCH and RANDOM switches
-    parser.add_argument('-seqlength', metavar='<seqlength>',
-                        help='Length of randomly generated sequence.', default=1000)
-    parser.add_argument('-seqcount', metavar='<seqcount>',
-                        help='Number of randomly generated sequences to create.', default=1000)
     parser.add_argument('-seqonly', dest='seqonly', help='Exit after outputting input seq.', action='store_true')
     parser.set_defaults(seqonly=False)
-    parser.add_argument('-indelsize', metavar='<indelsize>', help='Max indel size', default=0)
-    parser.add_argument('-indelrate', metavar='<indelrate>', help='Indel rate.', default=0.0)
-    parser.add_argument('-randbatch', metavar='<randbatch>',
-                        help='Number of times to run with randomly generated input.', default=100)
 
     args = parser.parse_args()
     inputfile = args.file
@@ -973,9 +1021,6 @@ if __name__ == "__main__":
     outtreetype = args.outtree
     alpha = args.alpha
     rmodel = args.rmodel
-    hapobj = args.hapobj
-    wtobj = args.wtobj
-    polyobj = args.polyobj
     maxdepth = int(args.maxdepth)
     maxheight = int(args.maxheight)
     maxneighbors = int(args.maxneighbors)
@@ -995,7 +1040,6 @@ if __name__ == "__main__":
     mnm = bool(args.mnm)
     rej = bool(args.rej)
     seqonly = bool(args.seqonly)
-    idsize = int(args.indelsize)
     exlocal = bool(args.exlocal)
 
     rng = random.SystemRandom()  # Uses /dev/urandom
@@ -1031,7 +1075,7 @@ if __name__ == "__main__":
         if seqonly:
             continue
 
-        phytree = PhyloTree()
+        phytree = PhyloTree(indata)
         phytree.input_tree(treetype=treetype, alpha=alpha, rmodel=rmodel, starttreename=starttree,
                            timestamp=randstamp,
                            maxthreads=maxthreads)
@@ -1046,12 +1090,12 @@ if __name__ == "__main__":
 
             print "\n****************\nTREE\n****************\n"
             Phylo.draw_ascii(phytree.tree)
-        phytree.output_tree(inputfile, outtreetype)
+        phytree.output_tree(infile, outtreetype)
 
         print "\n****************\nIMPUTATION\n****************\n"
         impute = Imputation(indata, phytree, mutrate, multi)
         impute.impute()
-        impute.output_imputed(inputfile, outtype, impout)
+        impute.output_imputed(infile, outtype, impout)
 
 else:
     print("IMPUTOR is being imported into another module. Not yet implemented.")
