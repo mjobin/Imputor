@@ -14,7 +14,6 @@ import random
 import sys
 import re
 from argparse import RawTextHelpFormatter
-
 import progressbar
 from Bio import AlignIO
 from Bio import Phylo
@@ -38,7 +37,6 @@ class InData(object):
         self.sequence = []  # Sequence data
         self.variantset = set()
         self.reflist = []
-        self.refset = set()
         self.variants = {}  # Dictionary of each sample and its variation from the reference sequence
         self.filebase = None
         self.orig_vcf_pos = []  # Original listed positions of variants
@@ -260,7 +258,7 @@ class InData(object):
             if int(cols[self.vcf_pos]) > self.maxseqlength:
                 self.maxseqlength = int(cols[self.vcf_pos])
             self.orig_vcf_pos.append(cols[self.vcf_pos])
-            self.refset.add(str(var_count) + cols[self.vcf_ref])
+            self.reflist.append(cols[self.vcf_ref])
             if (file_line[:1] == "#") or (cols[self.vcf_chrom] == '\n' or cols[self.vcf_info + 1][:2] != "GT"):
                 continue
             formatcols = cols[self.vcf_info + 1].split(":")
@@ -529,7 +527,7 @@ class PhyloTree(object):
         AlignIO.write(self.indata.sequence, tempfastafile, "fasta")
 
         raxml_args = {"sequences": tempfastafile, "model": rmodel, "name": self.impname,
-                      "parsimony_seed": rng.randint(0, sys.maxint), "threads": cpus, "parsimony": True}
+                      "parsimony_seed": rng.randint(0, sys.maxint), "threads": cpus, "parsimony": True, "algorithm": ralg}
 
         raxmlstarttreename = "RAxML_" + self.impname + "_starttree.newick"
         if self.starttree:
@@ -590,7 +588,7 @@ class PhyloTree(object):
         AlignIO.write(self.indata.sequence, tempfastafile, "fasta")
 
         raxml_args = {"sequences": tempfastafile, "model": rmodel, "name": self.impname,
-                      "parsimony_seed": rng.randint(0, sys.maxint), "threads": cpus}
+                      "parsimony_seed": rng.randint(0, sys.maxint), "threads": cpus, "algorithm": ralg}
 
         raxmlstarttreename = "RAxML_" + self.impname + "_starttree.newick"
         if self.starttree:
@@ -668,9 +666,14 @@ class PhyloTree(object):
 
 class Imputation(object):
     """Imputation of mutations given input data and a phylogenetic tree.
+    
+            Keyword arguments:
+            indata -- Input data.
+            phytree -- Phylogenetic tree
+            mutrate -- Mutation rate.
     """
 
-    def __init__(self, indata, phytree, mutrate, multi):
+    def __init__(self, indata, phytree, mutrate):
         self.cpucount = multiprocessing.cpu_count()
         self.workseq = {}
         self.imputedseq = MultipleSeqAlignment([])
@@ -685,6 +688,7 @@ class Imputation(object):
         self.indivimputes = {}
         self.neighbors = {}
         self.missinglist = {}
+        self.newvariants = []
 
         for seq in indata.sequence:
             self.workseq[seq.name] = list(str(seq.seq))  # Begin with output sequence matching input
@@ -692,11 +696,6 @@ class Imputation(object):
 
     def impute(self):
         """ Sets up imputation function for all terminal nodes.
-
-            Keyword arguments:
-            imputetype -- Type of search used to locate possible sites to impute.
-            depth -- Depth of search up and down tree to find neighbours.
-            neighbors -- Minimum number of identical non-missing neighbors in order to impute.
 
         """
 
@@ -722,8 +721,9 @@ class Imputation(object):
 
             Keyword arguments:
             term -- Terminal node on tree to be examined.
-            parents - List of parent nodes of each node in tree.
+            parents -- List of parent nodes of each node in tree.
             neighbors -- Minimum number of identical neighbors to impute.
+            thispass -- Number of current imputation pass.
 
         """
         for curvar in self.indata.variantset:
@@ -786,9 +786,18 @@ class Imputation(object):
                 for site, loc in itertools.izip(segseq, locs):
                     tmpseq[loc] = site
 
+
             seqrec = SeqRecord(Seq("".join(tmpseq)), id=fullseq.id, name=fullseq.id)
             self.imputedseq.append(seqrec)
 
+            if len(indata.reflist) > 0:  # if there is a reference sequence, find variants
+                for ref in indata.reflist:
+                    self.newvariants.append(list(ref))
+
+                for seq in self.imputedseq:
+                    for i in xrange(len(seq.seq)):
+                        if seq.seq[i] not in self.newvariants[i]:
+                            self.newvariants[i].append(seq.seq[i])
         self.imputedseq.sort()
 
     @staticmethod
@@ -842,7 +851,7 @@ class Imputation(object):
             nearest.add(self.workseq[str(neighbor)][curvar])
 
         if len(nearest) > 1:  # Cannot allow non-matching ever to impute sequence, thus this is first check
-            if mnm and orig in self.missing and len(nearest) == 2 and "N" in nearest:
+            if mnm and len(nearest) == 2 and "N" in nearest:
                 nearest.remove("N")  # Strip the one N, allowing imputation
             else:
                 return [termname, curvar, orig, ",".join(nearest), "Neighbors Non-matching", "F"]
@@ -940,11 +949,35 @@ class Imputation(object):
                 indivoutfile.write("\t")
             indivoutfile.write("\n")
         indivoutfile.close()
-        if out == "vcf":
-            outseqfile = filebase + "-seqout.vcf"
+
+        if outtype == "vcf" and len(indata.reflist) >0:
+            outseqfile = filebase + "-out.vcf"
             outfile = open(outseqfile, 'w')
-            outfile.write("##fileformat=VCFv4.1")
+            outfile.write("##fileformat=VCFv4.1\n")
+            outfile.write("##source=IMPUTORv1.0\n")
             outfile.write("#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	")
+            for seq in self.imputedseq:
+                outfile.write(str(seq.name))
+                outfile.write("\t")
+            outfile.write("\n")
+            for i in xrange(0, len(self.newvariants)):
+                if len(self.newvariants[i]) > 1:
+                    outfile.write("0\t")
+                    outfile.write(str(i))
+                    outfile.write("\t.\t")
+                    outfile.write(self.newvariants[i][0])
+                    outfile.write("\t")
+                    for j in xrange(1, len(self.newvariants[i])):
+                        if j > 1:
+                            outfile.write(",")
+                        outfile.write(self.newvariants[i][j])
+                    outfile.write("\t.\t.\t.\tGT\t")
+                    for seq in self.imputedseq:
+                        outfile.write(str(self.newvariants[i].index(seq.seq[i])))
+                        outfile.write("\t")
+                    outfile.write("\n")
+
+
         else:  # default to fasta
             outseqfile = filebase + "-seqout.fasta"
             outfile = open(outseqfile, 'w')
@@ -980,6 +1013,7 @@ if __name__ == "__main__":
     parser.add_argument('-outtree', metavar='<outtree>', help='Output format for tree', default='newick')
     parser.add_argument('-alpha', metavar='<alpha>', help='Value of gamma shape parameter.', default='e')
     parser.add_argument('-rmodel', metavar='<rmodel>', help='Model type for RaXML.', default='GTRCAT')
+    parser.add_argument('-ralg', metavar='<rmodel>', help='Algorithm type for RaXML.', default='d')
     parser.add_argument('-maxheight', metavar='<maxheight>',
                         help='Height of search toward root for collecting neighbors.',
                         default=2)
@@ -1021,6 +1055,7 @@ if __name__ == "__main__":
     outtreetype = args.outtree
     alpha = args.alpha
     rmodel = args.rmodel
+    ralg = args.ralg
     maxdepth = int(args.maxdepth)
     maxheight = int(args.maxheight)
     maxneighbors = int(args.maxneighbors)
@@ -1093,7 +1128,7 @@ if __name__ == "__main__":
         phytree.output_tree(infile, outtreetype)
 
         print "\n****************\nIMPUTATION\n****************\n"
-        impute = Imputation(indata, phytree, mutrate, multi)
+        impute = Imputation(indata, phytree, mutrate)
         impute.impute()
         impute.output_imputed(infile, outtype, impout)
 
