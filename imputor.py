@@ -34,7 +34,7 @@ class InData(object):
         self.fullsequence = []  # Raw sequence input including non-segregating sites
         self.fullvariantset = set()
         self.fullvariants = {}
-        self.sequence = []  # Sequence data
+        self.sequence = MultipleSeqAlignment([])  # Sequence data
         self.variantset = set()
         self.reflist = []
         self.variants = {}  # Dictionary of each sample and its variation from the reference sequence
@@ -111,6 +111,12 @@ class InData(object):
             outreffile.close()
         if rej:
             self.rej_infile(inputfile)
+
+        # #convert . to - in names of sequence
+        # for seq in self.sequence:
+        #     newname = seq.name.replace(".", "-")
+        #     seq.name = newname
+        #     seq.id = newname
 
         print "Finished input."
         return
@@ -726,10 +732,7 @@ class Imputation(object):
 
         """
 
-
-
         if boot > 0: # Bootstrap replicates
-            print "BEWT"
             for i in range(passes):
                 print "\nPass", i
                 bpar = iter(phytree.btreeparents)
@@ -742,15 +745,10 @@ class Imputation(object):
                     for term in terms:
                         neighbors = phytree.collect_kids_rootward(term, bparents, 0, maxheight, maxdepth, maxneighbors)
                         self.impute_bootstrap(term, bparents, neighbors, str(i + 1))
-                # for bootrep in self.bootreps.keys():
-                #     if  self.bootreps[bootrep][0] > 0:
-                #         print bootrep, " ---- ", self.bootreps[bootrep][0], " ---- " , self.bootreps[bootrep][1]
                 for bootrep in self.bootreps:
                     newimpute = bootrep.split(".")
                     impratio = float(self.bootreps[bootrep][0]) / float(self.bootreps[bootrep][1])
                     newimpute.append(str(impratio))
-                    # if self.bootreps[bootrep][0] > 0:
-                    #     print newimpute
                     if verbose:
                         self.imputelist.append(newimpute)
                         if impratio > threshold and newimpute[4] == "T":
@@ -767,7 +765,6 @@ class Imputation(object):
                 random.shuffle(terms)
                 bar = progressbar.ProgressBar()
                 for p in bar(range(len(terms))):
-                    # for term in terms:
                     term = terms[p]
                     neighbors = phytree.collect_kids_rootward(term, self.phytree.treeparents, 0, maxheight, maxdepth,
                                                               maxneighbors)
@@ -794,6 +791,7 @@ class Imputation(object):
             newimpute.append(thispass)
             if verbose:
                 self.imputelist.append(newimpute)
+
             else:
                 if newimpute[5] == "T":
                     self.imputelist.append(newimpute)
