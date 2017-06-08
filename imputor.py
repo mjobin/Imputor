@@ -22,6 +22,7 @@ from Bio.Phylo.Applications import RaxmlCommandline
 from Bio.Phylo.TreeConstruction import *
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
+import operator
 
 
 class InData(object):
@@ -34,7 +35,7 @@ class InData(object):
         self.fullsequence = []  # Raw sequence input including non-segregating sites
         self.fullvariantset = set()
         self.fullvariants = {}
-        self.sequence = []  # Sequence data
+        self.sequence = MultipleSeqAlignment([])
         self.variantset = set()
         self.reflist = []
         self.variants = {}  # Dictionary of each sample and its variation from the reference sequence
@@ -55,7 +56,6 @@ class InData(object):
         self.vcf_qual = 5
         self.vcf_filter = 6
         self.vcf_info = 7
-
         self.acgt = ['A', 'C', 'G', 'T']
 
         return
@@ -439,12 +439,12 @@ class PhyloTree(object):
     @staticmethod
     def all_parents(tree):
         parents = {}
-        for clade in tree.find_clades():
+        for clade in tree.find_clades(order='level'):
             for child in clade:
                 parents[child] = clade
         return parents
 
-    def collect_kids(self, clade, kids, depth, maxdepth):
+    def collect_kids(self, clade, kids, depth, maxdepth, term):
         """ Recursive function for collecting all children to specified depth
 
             Keyword arguments:
@@ -458,7 +458,8 @@ class PhyloTree(object):
             for child in clade:
                 if child.name:
                     kids.append(child)
-                self.collect_kids(child, kids, depth + 1, maxdepth)
+            for child in clade:
+                self.collect_kids(child, kids, depth + 1, maxdepth, term)
         return kids
 
     def collect_all_kids(self, clade, kids):
@@ -485,6 +486,64 @@ class PhyloTree(object):
                     siblings.append(kid)
         return siblings
 
+    def collect_by_distance(self, term, terms):
+        neighbors = set()
+        ndist = {}
+        maxjump = 100.0
+        for neb in terms:
+            if neb is not term:
+                ndist[neb] = self.tree.distance(term, neb)
+        sorted_neb = sorted(ndist.items(), key=operator.itemgetter(1))
+        for i in xrange(len(sorted_neb)):
+            if i >= maxneighbors:
+                break
+            if i > 0:
+                if sorted_neb[i][1] > 0.0 and sorted_neb[i-1][1] > 0.0:
+                    if sorted_neb[i][1] / sorted_neb[i - 1][1] > maxjump:
+                        break
+            neighbors.add(sorted_neb[i][0])
+        return neighbors
+
+    def collect_kids_new(self, term, parents, maxheight, maxneighbors):
+        workneighbors = set()
+        neighbors = set()
+        maxjump = 10.0
+        maxhops = 5
+        height = 0
+        # print "\n********* ", term
+        while len(workneighbors) <= maxneighbors: #Hop up and down tree
+            curnode = term
+            for i in xrange(height):
+                if curnode not in parents:  # will not go past the root
+                    break
+                curnode = parents[curnode]
+                empty = []
+                allkids = self.collect_kids(curnode, empty, 0, height+1, term)
+                for kid in allkids:
+                    if kid is not term:
+                        workneighbors.add(kid)
+            height += 1
+        ndist = {}
+        for neb in workneighbors:
+            if len(self.tree.trace(term, neb)) <= maxhops:
+                ndist[neb] = self.tree.distance(term, neb)
+                # print term, " ", self.tree.distance(term, parents[term])," ", neb , " ", ndist[neb], " ", len(self.tree.trace(term, neb))
+        sorted_neb = sorted(ndist.items(), key=operator.itemgetter(1))
+        for i in xrange(len(sorted_neb)):
+            if i >= maxneighbors:
+                break
+            # if i == 1: #Special case of large initial jump to first neighbour
+            #     if sorted_neb[i][1] > 0.0 and sorted_neb[i - 1][1] > 0.0:
+            #         if sorted_neb[i-1][1] / sorted_neb[i][1] > maxjump:
+            #             neighbors.remove(sorted_neb[i-1][0])
+            #             break
+            # if i > 0:
+            #     if sorted_neb[i][1] > 0.0 and sorted_neb[i-1][1] > 0.0:
+            #         if sorted_neb[i][1] / sorted_neb[i - 1][1] > maxjump:
+            #             break
+            neighbors.add(sorted_neb[i][0])
+        return neighbors
+
     def collect_kids_rootward(self, term, parents, height, maxheight, maxdepth, maxneighbors):
         neighbors = set()
         curnode = term
@@ -492,12 +551,11 @@ class PhyloTree(object):
         while len(neighbors) < maxneighbors:
             if curnode not in parents:  # will not go past the root
                 break
-            if height >= maxheight:
+            if height > maxheight:
                 break
             curparent = parents[curnode]
-
             empty = []
-            allkids = self.collect_kids(curparent, empty, 0, maxdepth)
+            allkids = self.collect_kids(curparent, empty, 0, maxdepth, term)
             for kid in allkids:
                 if kid is not term:
                     neighbors.add(kid)
@@ -681,7 +739,6 @@ class Imputation(object):
         self.phytree = phytree
         self.mu = mutrate
         self.imputelist = []
-        self.reversionlist = []
         self.multi = multi
         self.acgt = {'A', 'C', 'G', 'T'}
         self.missing = {'.', '-', 'N'}
@@ -689,6 +746,7 @@ class Imputation(object):
         self.neighbors = {}
         self.missinglist = {}
         self.newvariants = []
+        self.backmutchks = []
 
         for seq in indata.sequence:
             self.workseq[seq.name] = list(str(seq.seq))  # Begin with output sequence matching input
@@ -704,11 +762,14 @@ class Imputation(object):
             print "\nPass", i
             random.shuffle(terms)
             bar = progressbar.ProgressBar()
-            for p in bar(range(len(terms))):
-                # for term in terms:
-                term = terms[p]
-                neighbors = phytree.collect_kids_rootward(term, self.phytree.treeparents, 0, maxheight, maxdepth,
-                                                          maxneighbors)
+            # for p in bar(range(len(terms))):
+            for term in terms:
+            #     term = terms[p]
+                # neighbors = phytree.collect_by_distance(term, terms)
+                neighbors = phytree.collect_kids_new(term, self.phytree.treeparents, maxheight, maxneighbors)
+                # neighbors = phytree.collect_kids_rootward(term, self.phytree.treeparents, 0, maxheight, maxdepth, maxneighbors)
+                self.neighbors[term] = neighbors
+
                 self.impute_threshold(term, self.phytree.treeparents, neighbors, str(i + 1))
             for newimpute in self.imputelist:
                 if newimpute[5] == "T":
@@ -821,7 +882,8 @@ class Imputation(object):
 
     def backmutchk(self, term, parents, allneighbours, curvar, origseq):
         backmut = False
-        allneighbours.add(term)  # don't check self
+        jorneighburs = []
+
         curparent = parents[term]
         while curparent in phytree.treeparents:  # Search for allele farther away
             if backmut:
@@ -834,9 +896,15 @@ class Imputation(object):
                 if kidseq in self.missing:
                     continue
                 if kid not in allneighbours and kidseq == origseq:
+                    for nb in allneighbours:
+                        jorneighburs.append(str(nb))
+                    self.backmutchks.append([str(term), str(curvar), origseq, str(jorneighburs), str(kid),"T"])
                     backmut = True
                 allneighbours.add(kid)
             curparent = nextparent
+        for nb in allneighbours:
+            jorneighburs.append(str(nb))
+        self.backmutchks.append([str(term), str(curvar), origseq,  str(jorneighburs), "N/A","F"])
         return False
 
     def detect_by_parsimony(self, term, curvar, parents, neighbors):
@@ -844,10 +912,13 @@ class Imputation(object):
         termname = str(term)
         finame = termname + "-" + str(curvar)
 
+        bmneighbors = set()
+        bmneighbors.add(term)
         nearest = set()
         orig = self.workseq[termname][curvar]
 
         for neighbor in neighbors:
+            bmneighbors.add(neighbor)
             nearest.add(self.workseq[str(neighbor)][curvar])
 
         if len(nearest) > 1:  # Cannot allow non-matching ever to impute sequence, thus this is first check
@@ -894,10 +965,10 @@ class Imputation(object):
                 if nobackmutchk:
                     return [termname, curvar, orig, only, "Imputed Non-missing", "T"]
                 else:
-                    if self.backmutchk(term, parents, neighbors, curvar, orig):
+                    if self.backmutchk(term, parents, bmneighbors, curvar, orig):
                         return [termname, curvar, orig, only, "Imputed Non-missing", "T"]
                     else:
-                        return [termname, curvar, orig, only, "No Back Mutation", "F"]
+                        return [termname, curvar, orig, only, "No Reversion", "F"]
             else:
                 return [termname, curvar, orig, only, "Matches Neighbors", "F"]
 
@@ -931,13 +1002,6 @@ class Imputation(object):
         indivoutfile = open(indivoutfilename, 'w')
         indivoutfile.write("SUBJECTID\t NUM\n")
 
-        revfilename = filebase + "-rev.txt"
-        revoutfile = open(revfilename, 'w')
-        revoutfile.write("SUBJECTID\t VAR\t SITE\t REV?\n")
-        for rev in self.reversionlist:
-            revoutfile.write("\t".join(rev))
-            revoutfile.write("\n")
-        revoutfile.close()
 
         for indiv in self.indivimputes.keys():
             indivoutfile.write(indiv)
@@ -991,6 +1055,21 @@ class Imputation(object):
                 outfile.write(outseq[x])
                 outfile.write("\n")
             outfile.close()
+
+        bmfile = open("backmut.txt", 'w')
+        for bmchk in self.backmutchks:
+            bmfile.write("\t".join(bmchk))
+            bmfile.write("\n")
+
+        nbfile = open("neighbors.txt", 'w')
+        for nb in self.neighbors.keys():
+            nbfile.write(str(nb))
+            nbfile.write("\t:\t")
+            for nbb in self.neighbors[nb]:
+                nbfile.write(str(nbb))
+                nbfile.write("\t")
+            nbfile.write("\n")
+
 
     def makemissinglist(self):
         self.missinglist = {}
@@ -1049,6 +1128,7 @@ if __name__ == "__main__":
     parser.add_argument('-seqonly', dest='seqonly', help='Exit after outputting input seq.', action='store_true')
     parser.set_defaults(seqonly=False)
 
+
     args = parser.parse_args()
     inputfile = args.file
     treetype = args.tree
@@ -1077,7 +1157,11 @@ if __name__ == "__main__":
     seqonly = bool(args.seqonly)
     exlocal = bool(args.exlocal)
 
+
     rng = random.SystemRandom()  # Uses /dev/urandom
+
+    sys.setrecursionlimit(2 ** 20)
+
 
     batchlist = []
 
