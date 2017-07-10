@@ -1,6 +1,6 @@
 # Imputor
 
-""" Imputor - software for imputing missing mutations in sequencing data by the use
+""" Imputor - software for imputing missing and non-missing mutations in sequencing data by the use
     of phylogenetic trees.
     
     Author - Matthew Jobin, Department of Anthropology, Santa Clara University
@@ -46,6 +46,7 @@ class InData(object):
         self.addict = {}
         self.maxseqlength = 0
         self.revrate = -1
+        self.pruned_to_full = []  # list where position in list is pruned location
 
         # The eight mandatory columns of a VCF file. Here for clarity in functions below.
         self.vcf_chrom = 0
@@ -60,21 +61,21 @@ class InData(object):
 
         return
 
-    def load_input_data(self, inputfile=None):
+    def load_input_data(self, linfile):
         """ Load input data from a file.
-            
-            Keyword arguments:
-            inputfile -- Input data. Accepted formats: FASTA, VCF.
+
+        :param linfile:
+        :return:
         """
 
-        filebase, fileext = os.path.splitext(inputfile)
+        filebase, fileext = os.path.splitext(linfile)
         self.filebase = filebase
-        if inputfile[-5:] == 'fasta':
-            self.sequence = AlignIO.read(inputfile, 'fasta')
+        if linfile[-5:] == 'fasta':
+            self.sequence = AlignIO.read(linfile, 'fasta')
             self.variants_from_sequence()
             self.prune_non_seg()
-        elif inputfile[-3:] == 'vcf':
-            file_data = open(inputfile, 'r')
+        elif linfile[-3:] == 'vcf':
+            file_data = open(linfile, 'r')
             raw_data = []
             for file_line in file_data:
                 if len(file_line.rstrip()) > 0:  # Strip blank lines
@@ -110,16 +111,16 @@ class InData(object):
             outreffile.write("\n")
             outreffile.close()
         if rej:
-            self.rej_infile(inputfile)
+            self.rej_infile(linfile)
 
         print "Finished input."
         return
 
     def vcf_expand_multi_allele(self, in_data=None):
         """ Processes multiple ALT alleles in a VCF file. Returns expanded data in list form.
-            
-            Keyword arguments:
-            in_data-- VCF file data.
+
+        :param in_data:
+        :return:
         """
         expanded_file_data = []
         print "\nExpanding multi-allele entries..."
@@ -147,9 +148,9 @@ class InData(object):
 
     def vcf_snp_prune(self, in_data=None):
         """ Returns a VCF file including only lines containing SNPs.
-            
-            Keyword arguments:
-            in_data-- VCF file data.
+
+        :param in_data:
+        :return:
         """
         snps_data = []
         print "\nPruning non-SNP entries..."
@@ -174,9 +175,25 @@ class InData(object):
         """ Returns a list of variants from a reference sequence.
             Intended for use with FASTA input, but will work with any AlignIO object or
             list of sequence data.
+
+        :return:
         """
         print "\nGenerating variants from sequence..."
         firstseq = self.sequence[0]
+        diffsets = []
+        for i in range(len(firstseq)):
+            diffsets.append(set())
+        bar = progressbar.ProgressBar()
+        for i in bar(range(len(self.sequence))):
+            seq_line = self.sequence[i]
+            if len(seq_line) != len(firstseq):
+                print "Error! A sequence line is a different size", len(seq_line), "than the first sequence!", len(
+                    firstseq)
+                print seq_line
+                exit()
+            for j in range(len(seq_line)):
+                diffsets[j].add(seq_line[j])
+
         bar = progressbar.ProgressBar()
         for i in bar(range(len(self.sequence))):
             seq_line = self.sequence[i]
@@ -196,6 +213,8 @@ class InData(object):
     def prune_non_seg(self):
         """ Strips out non-segregating sites from a sequence alignment.
             Uses self.variantset, which must be filled first.
+
+        :return:
         """
         self.fullsequence = self.sequence  # First back up the original sequence
         self.fullvariantset = self.variantset
@@ -214,7 +233,9 @@ class InData(object):
             stripped[seq.name] = []
             seqnames.append(seq.name)
 
-        for loc in locs:
+        for i in xrange(len(locs)):
+            loc = locs[i]
+            self.pruned_to_full.append(loc)
             seqbits = self.fullsequence[:, loc]
             name = 0
             for seqbit in seqbits:
@@ -229,6 +250,11 @@ class InData(object):
         self.variants_from_sequence()  # Re-run on stripped sequence
 
     def seq_from_variants_excl(self, raw_data=None):
+        """ Create sequence using a list of variants.
+
+        :param raw_data:
+        :return:
+        """
         print "\nCollecting genotype names..."
         genotype_names = []
         genotype_sequence = {}
@@ -332,14 +358,14 @@ class InData(object):
         self.fullvariantset = self.variantset
         self.fullvariants = self.variants
 
-    def rej_infile(self, inputfile=None):
-        """ Outout a REJECTOR2 input file
+    def rej_infile(self, linfile=None):
+        """ Output a REJECTOR2 input file
 
-            Keyword arguments:
-            inputfile -- Input data. Accepted formats: FASTA, VCF.
+        :param linfile:
+        :return:
         """
 
-        filebase, fileext = os.path.splitext(inputfile)
+        filebase, fileext = os.path.splitext(linfile)
         rejfilename = filebase + "-rej.txt"
 
         rejfile = open(rejfilename, 'w')
@@ -375,7 +401,7 @@ class InData(object):
 
 
 class PhyloTree(object):
-    """A phylogenetic tree either input from phyloxml format or constructed from sequence
+    """A phylogenetic tree either input from phyloxml format or constructed from sequence.
     """
 
     def __init__(self, indata):
@@ -386,12 +412,20 @@ class PhyloTree(object):
         self.tree = None  # Phylogenetic tree to be loaded or constructed from data. Newick format.
         self.treeparents = {}
         self.starttree = None  # Phylogenetic tree used as starting tree in RAxML
+        self.btrees = []  # Bootstrap replicates of trees. Newick format.
+        self.btreeparents = []
+        self.raxmlalgs = {'a', 'd', 'o'}
 
     def input_tree(self, treetype=None, alpha=None, rmodel=None, starttreename=None, timestamp=None, maxthreads=None):
-        """ Takes input tree file or sequence data.
-
-            Keyword arguments:
-            treetype -- type of tree to be input or constructed
+        """
+        Takes input tree file or sequence data.
+        :param treetype:
+        :param alpha:
+        :param rmodel:
+        :param starttreename:
+        :param timestamp:
+        :param maxthreads:
+        :return:
         """
         self.treetype = treetype
         self.impname = "imp" + str(timestamp)
@@ -417,13 +451,15 @@ class PhyloTree(object):
             self.phyml_tree(alpha)
 
         self.treeparents = self.all_parents(self.tree)
+        for btree in self.btrees:
+            self.btreeparents.append(self.all_parents(btree))
 
     def output_tree(self, inputfile, outtreetype):
-        """Outputs tree to file
+        """ Outputs tree to file.
 
-            Keyword arguments:
-            inputfile -- name if input file
-            outtreetype -- format of tree file for output
+        :param inputfile: original input file
+        :param outtreetype: type of tree to output
+        :return:
         """
         filebase, fileext = os.path.splitext(inputfile)
         if outtreetype == 'phyloxml':
@@ -438,36 +474,40 @@ class PhyloTree(object):
 
     @staticmethod
     def all_parents(tree):
+        """ Find all parents of all children in the tree.
+
+        :param tree: Input tree.
+        :return: List of parents for each clade.
+        """
         parents = {}
         for clade in tree.find_clades(order='level'):
             for child in clade:
                 parents[child] = clade
         return parents
 
-    def collect_kids(self, clade, kids, depth, maxdepth, term):
+    def collect_kids(self, clade, kids, depth, maxdepth):
         """ Recursive function for collecting all children to specified depth
 
-            Keyword arguments:
-            clade -- current node of tree
-            kids --list of all collected children
-            depth -- current depth of search
-            maxdepth -- maximum depth of search
+        :param clade: current node of tree
+        :param kids: list of all collected children
+        :param depth: current depth of search
+        :param maxdepth: maximum depth of search
+        :return:
         """
-        #
         if depth < maxdepth:
             for child in clade:
                 if child.name:
                     kids.append(child)
             for child in clade:
-                self.collect_kids(child, kids, depth + 1, maxdepth, term)
+                self.collect_kids(child, kids, depth + 1, maxdepth)
         return kids
 
     def collect_all_kids(self, clade, kids):
         """ Recursive function for collecting all children of clade
 
-            Keyword arguments:
-            clade -- current node of tree
-            kids -- lost of all collected children
+        :param clade: current node of tree
+        :param kids: lost of all collected children
+        :return:
         """
         for child in clade:
             if child.name:
@@ -477,6 +517,11 @@ class PhyloTree(object):
 
     @staticmethod
     def get_siblings(clade):
+        """ Get siblings of a clade.
+
+        :param clade: input clade
+        :return: siblings
+        """
         siblings = []
         if clade in phytree.treeparents:  # Will not go past the root clade
             for kid in phytree.treeparents[clade]:
@@ -486,80 +531,133 @@ class PhyloTree(object):
                     siblings.append(kid)
         return siblings
 
-    def collect_by_distance(self, term, terms):
+    def neighbors_by_distance(self, term, terms, tsize):
+        """ Function for collecting all children of clade
+
+        :param term: current node of tree
+        :param terms: lost of all collected children
+        :param tsize: threshold number of neighbors
+        :return: set of closest neighbors
+        """
         neighbors = set()
         ndist = {}
-        maxjump = 100.0
         for neb in terms:
             if neb is not term:
                 ndist[neb] = self.tree.distance(term, neb)
         sorted_neb = sorted(ndist.items(), key=operator.itemgetter(1))
         for i in xrange(len(sorted_neb)):
-            if i >= maxneighbors:
+            if i >= tsize:
                 break
             if i > 0:
-                if sorted_neb[i][1] > 0.0 and sorted_neb[i-1][1] > 0.0:
+                if sorted_neb[i][1] > 0.0 and sorted_neb[i - 1][1] > 0.0:
                     if sorted_neb[i][1] / sorted_neb[i - 1][1] > maxjump:
                         break
             neighbors.add(sorted_neb[i][0])
         return neighbors
 
-    def collect_kids_new(self, term, parents, maxheight, maxneighbors):
+    def neighbors_by_mono(self, term, ctree, parents, tsize, maxn):
+        """ Collect neighbors of minimum sized monophyletic clade including term.
+
+        :param term: current node of tree
+        :param ctree: current tree
+        :param parents: list of parents of nodes
+        :param tsize: threshold number of neighbors
+        :param maxn: maximum number of neighbors to search for monophyly
+        :return: set of closest neighbors
+        """
+        neighbors = set()
+        monn = set()
+        monn.add(term)
+        curnode = term
+        while len(neighbors) < tsize:
+            if curnode not in parents:  # will not go past the root
+                break
+            curparent = parents[curnode]
+            allkids = self.collect_all_kids(curparent, [])
+            for kid in allkids:
+                if kid is not term:
+                    neighbors.add(kid)
+                    monn.add(kid)
+                    if len(neighbors) >= tsize and ctree.is_monophyletic(monn):
+                        return neighbors
+                    if len(neighbors) > maxn:
+                        return set()
+            curnode = curparent
+        return set()
+
+    def neighbors_by_hops(self, term, ctree, parents, tsize):
+        """ Collect neighbors up to a maximum number of hops along tree.
+
+        :param term: current node of tree
+        :param ctree: current tree
+        :param parents: list of parents of nodes
+        :param tsize: threshold number of neighbors
+        :return: set of closest neighbors
+        """
         workneighbors = set()
         neighbors = set()
-        maxjump = 10.0
-        maxhops = 5
+        monn = set()
+        monn.add(term)
+
         height = 0
-        # print "\n********* ", term
-        while len(workneighbors) <= maxneighbors: #Hop up and down tree
+        # FIXME should i just colect ALL kids until tsize here?
+        while len(workneighbors) <= tsize:
             curnode = term
             for i in xrange(height):
                 if curnode not in parents:  # will not go past the root
                     break
                 curnode = parents[curnode]
-                empty = []
-                allkids = self.collect_kids(curnode, empty, 0, height+1, term)
+                allkids = self.collect_kids(curnode, [], 0, height + 1)
                 for kid in allkids:
                     if kid is not term:
                         workneighbors.add(kid)
             height += 1
         ndist = {}
         for neb in workneighbors:
-            if len(self.tree.trace(term, neb)) <= maxhops:
-                ndist[neb] = self.tree.distance(term, neb)
-                # print term, " ", self.tree.distance(term, parents[term])," ", neb , " ", ndist[neb], " ", len(self.tree.trace(term, neb))
+            if len(ctree.trace(term, neb)) <= maxhops:
+                ndist[neb] = ctree.distance(term, neb)
         sorted_neb = sorted(ndist.items(), key=operator.itemgetter(1))
         for i in xrange(len(sorted_neb)):
-            if i >= maxneighbors:
+            if i >= tsize:
                 break
-            # if i == 1: #Special case of large initial jump to first neighbour
-            #     if sorted_neb[i][1] > 0.0 and sorted_neb[i - 1][1] > 0.0:
-            #         if sorted_neb[i-1][1] / sorted_neb[i][1] > maxjump:
-            #             neighbors.remove(sorted_neb[i-1][0])
-            #             break
-            # if i > 0:
-            #     if sorted_neb[i][1] > 0.0 and sorted_neb[i-1][1] > 0.0:
-            #         if sorted_neb[i][1] / sorted_neb[i - 1][1] > maxjump:
-            #             break
+            if i == 1:  # Special case of large initial jump to first neighbour
+                if sorted_neb[i][1] > 0.0 and sorted_neb[i - 1][1] > 0.0:
+                    if sorted_neb[i - 1][1] / sorted_neb[i][1] > maxjump:
+                        neighbors.remove(sorted_neb[i - 1][0])
+                        break
+            if i > 0:
+                if sorted_neb[i][1] > 0.0 and sorted_neb[i - 1][1] > 0.0:
+                    if sorted_neb[i][1] / sorted_neb[i - 1][1] > maxjump:
+                        break
+            monn.add(sorted_neb[i][0])
             neighbors.add(sorted_neb[i][0])
         return neighbors
 
-    def collect_kids_rootward(self, term, parents, height, maxheight, maxdepth, maxneighbors):
+    def neighbors_by_rootward(self, term, parents, height, maxheight, maxdepth, tsize):
+        """
+
+        :param term: current node of tree
+        :param parents: list of parents of nodes
+        :param height:
+        :param maxheight: maximum height to ascend toward root
+        :param maxdepth: maximum depth to descend from each node in search of children
+        :param tsize: threshold number of neighbors
+        :return: set of closest neighbors
+        """
         neighbors = set()
         curnode = term
         # Collect closest neighbors on tree
-        while len(neighbors) < maxneighbors:
+        while len(neighbors) < tsize:
             if curnode not in parents:  # will not go past the root
                 break
             if height > maxheight:
                 break
             curparent = parents[curnode]
-            empty = []
-            allkids = self.collect_kids(curparent, empty, 0, maxdepth, term)
+            allkids = self.collect_kids(curparent, [], 0, maxdepth)
             for kid in allkids:
                 if kid is not term:
                     neighbors.add(kid)
-                    if len(neighbors) >= maxneighbors:
+                    if len(neighbors) >= tsize:
                         break
             curnode = curparent
             height += 1
@@ -585,14 +683,14 @@ class PhyloTree(object):
         AlignIO.write(self.indata.sequence, tempfastafile, "fasta")
 
         raxml_args = {"sequences": tempfastafile, "model": rmodel, "name": self.impname,
-                      "parsimony_seed": rng.randint(0, sys.maxint), "threads": cpus, "parsimony": True, "algorithm": ralg}
+                      "parsimony_seed": rng.randint(0, sys.maxint), "threads": cpus, "parsimony": True,
+                      "algorithm": ralg}
 
         raxmlstarttreename = "RAxML_" + self.impname + "_starttree.newick"
         if self.starttree:
             Phylo.write(self.starttree, raxmlstarttreename, "newick")
             raxml_args["starting_tree"] = raxmlstarttreename
 
-        raxml_cline = ""
         if exlocal:
             raxml_cline = RaxmlCommandline(cmd='./raxmlHPC', **raxml_args)
         else:
@@ -646,14 +744,24 @@ class PhyloTree(object):
         AlignIO.write(self.indata.sequence, tempfastafile, "fasta")
 
         raxml_args = {"sequences": tempfastafile, "model": rmodel, "name": self.impname,
-                      "parsimony_seed": rng.randint(0, sys.maxint), "threads": cpus, "algorithm": ralg}
+                      "parsimony_seed": rng.randint(0, sys.maxint), "threads": cpus}
+
+        if boot > 0:
+            raxml_args["num_replicates"] = boot
+            raxml_args['rapid_bootstrap_seed'] = rng.randint(0, sys.maxint)
+            raxml_args['algorithm'] = "a"
+        if runs > 0:
+            print "Multi run"
+            raxml_args["num_replicates"] = runs
+            raxml_args['algorithm'] = "d"
+        else:
+            raxml_args['algorithm'] = "d"
 
         raxmlstarttreename = "RAxML_" + self.impname + "_starttree.newick"
         if self.starttree:
             Phylo.write(self.starttree, raxmlstarttreename, "newick")
             raxml_args["starting_tree"] = raxmlstarttreename
 
-        raxml_cline = ""
         if exlocal:
             raxml_cline = RaxmlCommandline(cmd='./raxmlHPC', **raxml_args)
         else:
@@ -665,8 +773,17 @@ class PhyloTree(object):
         if verbose:
             print err_log
             print out_log
-        raxmlbesttreename = "RAxML_bestTree." + self.impname
-        self.tree = Phylo.read(raxmlbesttreename, "newick")
+
+        if runs > 0:
+            for i in range(runs):
+                raxmlrunname = "RAxML_result." + self.impname + ".RUN." + str(i)
+                self.btrees.append(Phylo.read(raxmlrunname, "newick"))
+        if boot > 0:
+            raxmlbsname = "RAxML_bootstrap." + self.impname
+            self.btrees = list(Phylo.parse(raxmlbsname, "newick"))
+        else:
+            raxmlbesttreename = "RAxML_bestTree." + self.impname
+            self.tree = Phylo.read(raxmlbesttreename, "newick")
 
         # Erase RaXML intermediate files
         if not verbose:
@@ -702,7 +819,6 @@ class PhyloTree(object):
             Phylo.write(self.starttree, phystarttreename, "newick")
             phyml_args["input_tree"] = phystarttreename
 
-        cmdline = ""
         if exlocal:
             cmdline = PhymlCommandline(cmd='./PhyML', **phyml_args)
         else:
@@ -747,6 +863,7 @@ class Imputation(object):
         self.missinglist = {}
         self.newvariants = []
         self.backmutchks = []
+        self.bootreps = {}
 
         for seq in indata.sequence:
             self.workseq[seq.name] = list(str(seq.seq))  # Begin with output sequence matching input
@@ -757,80 +874,156 @@ class Imputation(object):
 
         """
 
-        terms = self.phytree.tree.get_terminals()  # Get all internal nodes on tree. These are the ones with samples.
-        for i in range(passes):
-            print "\nPass", i
-            random.shuffle(terms)
-            bar = progressbar.ProgressBar()
-            # for p in bar(range(len(terms))):
-            for term in terms:
-            #     term = terms[p]
-                # neighbors = phytree.collect_by_distance(term, terms)
-                neighbors = phytree.collect_kids_new(term, self.phytree.treeparents, maxheight, maxneighbors)
-                # neighbors = phytree.collect_kids_rootward(term, self.phytree.treeparents, 0, maxheight, maxdepth, maxneighbors)
-                self.neighbors[term] = neighbors
+        if kidcollect == 'hops':
+            print "HOPS"
+        elif kidcollect == 'distance':
+            print "DISTANCE"
+        elif kidcollect == 'mono':
+            print "MONO"
+        else:
+            print "ROOTWARD"
 
-                self.impute_threshold(term, self.phytree.treeparents, neighbors, str(i + 1))
-            for newimpute in self.imputelist:
-                if newimpute[5] == "T":
-                    self.indivimputes[newimpute[0]].append(newimpute[1])
-                    self.workseq[newimpute[0]][newimpute[1]] = newimpute[3]
+        terms = self.phytree.tree.get_terminals()  # Get all internal nodes on tree. These are the ones with samples.
+        if boot > 0 or runs > 0:  # Bootstrap replicates or multiple runs
+            for i in range(passes):
+                print "\nPass", i
+                bpar = iter(phytree.btreeparents)
+                bar = progressbar.ProgressBar()
+                for j in bar(range(len(self.phytree.btrees))):
+                    # for btree in self.phytree.btrees:
+                    btree = self.phytree.btrees[j]
+                    terms = btree.get_terminals()
+                    random.shuffle(terms)
+                    bparents = next(bpar)
+                    for term in terms:
+                        if kidcollect == 'hops':
+                            nneighbors = phytree.neighbors_by_hops(term, self.phytree.tree, self.phytree.treeparents,
+                                                                   nsize)
+                            mneighbors = phytree.neighbors_by_hops(term, self.phytree.tree, self.phytree.treeparents,
+                                                                   msize)
+                        elif kidcollect == 'distance':
+                            nneighbors = phytree.neighbors_by_distance(term, terms, nsize)
+                            mneighbors = phytree.neighbors_by_distance(term, terms, msize)
+                        elif kidcollect == 'mono':
+                            nneighbors = phytree.neighbors_by_mono(term, self.phytree.tree, self.phytree.treeparents,
+                                                                   nsize, maxn)
+                            mneighbors = phytree.neighbors_by_mono(term, self.phytree.tree, self.phytree.treeparents,
+                                                                   msize, maxn)
+                        else:
+                            nneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, maxheight,
+                                                                       maxdepth, nsize)
+                            mneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, maxheight,
+                                                                       maxdepth, msize)
+                        self.impute_bootstrap(term, bparents, str(i + 1), mneighbors, nneighbors)
+                for bootrep in self.bootreps:
+                    newimpute = bootrep.split(".")
+                    impratio = float(self.bootreps[bootrep][0]) / float(self.bootreps[bootrep][1])
+                    newimpute.append(str(impratio))
+                    if verbose:
+                        if impratio > threshold:
+                            newimpute.append("T")
+                            self.workseq[newimpute[0]][int(newimpute[1])] = newimpute[3]
+                        else:
+                            newimpute.append("F")
+                        self.imputelist.append(newimpute)
+                    else:
+                        if impratio > threshold:
+                            newimpute.append("T")
+                            self.imputelist.append(newimpute)
+                            self.workseq[newimpute[0]][int(newimpute[1])] = newimpute[3]
+
+        else:
+            for i in range(passes):
+                print "\nPass", i
+                random.shuffle(terms)
+                bar = progressbar.ProgressBar()
+                for p in bar(range(len(terms))):
+                    term = terms[p]
+                    # for term in terms:
+                    if kidcollect == 'hops':
+                        nneighbors = phytree.neighbors_by_hops(term, self.phytree.tree, self.phytree.treeparents, nsize)
+                        mneighbors = phytree.neighbors_by_hops(term, self.phytree.tree, self.phytree.treeparents, msize)
+                    elif kidcollect == 'distance':
+                        nneighbors = phytree.neighbors_by_distance(term, terms, nsize)
+                        mneighbors = phytree.neighbors_by_distance(term, terms, msize)
+                    elif kidcollect == 'mono':
+                        nneighbors = phytree.neighbors_by_mono(term, self.phytree.tree, self.phytree.treeparents,
+                                                               nsize, maxn)
+                        mneighbors = phytree.neighbors_by_mono(term, self.phytree.tree, self.phytree.treeparents,
+                                                               msize, maxn)
+                    else:
+                        nneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, maxheight,
+                                                                   maxdepth, nsize)
+                        mneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, maxheight,
+                                                                   maxdepth, msize)
+
+                    self.impute_threshold(term, self.phytree.treeparents, str(i + 1),
+                                          mneighbors, nneighbors)
+                for newimpute in self.imputelist:
+                    if newimpute[6] == "T":
+                        self.indivimputes[newimpute[0]].append(newimpute[1])
+                        self.workseq[newimpute[0]][newimpute[1]] = newimpute[3]
         self.process_imputed()
 
-    def impute_threshold(self, term, parents, neighbors, thispass):
+    def impute_threshold(self, term, parents, thispass, mneighbors, nneighbors):
         """ Imputation on best tree.
 
-            Keyword arguments:
-            term -- Terminal node on tree to be examined.
-            parents -- List of parent nodes of each node in tree.
-            neighbors -- Minimum number of identical neighbors to impute.
-            thispass -- Number of current imputation pass.
-
+        :param parents: list of parents of all nodes in current tree
+        :param term: terminal node
+        :param thispass: number of current imputation pass
+        :param mneighbors: neighbors collected with the msize threshold
+        :param nneighbors: neighbors collected with the nsize threshold
+        :return:
         """
+        termname = str(term)
         for curvar in self.indata.variantset:
-            newimpute = self.detect_by_parsimony(term, curvar, parents, neighbors)
-            newimpute.append(thispass)
+            if self.workseq[termname][curvar] in self.missing:
+                neighbors = mneighbors
+            else:
+                neighbors = nneighbors
+            nbs = []
+            for nb in neighbors:
+                nbs.append(str(nb))
+            nbname = str(term) + "-" + str(curvar)
+            self.neighbors[nbname] = nbs
+            newimpute = self.detect_by_parsimony(term, curvar, parents, neighbors, thispass)
             if verbose:
                 self.imputelist.append(newimpute)
             else:
-                if newimpute[5] == "T":
+                if newimpute[6] == "T":
                     self.imputelist.append(newimpute)
 
-    def backmutscan(self):
-        terms = self.phytree.tree.get_terminals()
-        random.shuffle(terms)
-        backmuts = 0
-        allmuts = 0
-        for term in terms:
-            termname = str(term)
-            neighbors = phytree.collect_kids_rootward(term, self.phytree.treeparents, 0, maxheight, maxdepth,
-                                                      maxneighbors)
+    def impute_bootstrap(self, term, bparents, thispass, mneighbors, nneighbors):
+        """ Imputation with bootstrap replicates or multiple runs on a single file.
 
-            self.neighbors[term] = neighbors
-            if len(neighbors) < maxneighbors:
-                continue
-            for curvar in self.indata.variantset:
-                orig = self.workseq[termname][curvar]
-                if orig in self.missing:
-                    continue
-                origvar = str(indata.orig_vcf_pos[curvar])
-
-                nearest = set()
-                for neighbor in neighbors:
-                    nearest.add(self.workseq[str(neighbor)][curvar])
-                if len(nearest) == 1:
-                    only = nearest.pop()
-                    if only in self.missing or orig == only:
-                        continue
-                    if self.backmutchk(term, self.phytree.treeparents, neighbors, curvar, orig):
-                        self.reversionlist.append([termname, origvar, orig, "T"])
-                        backmuts += 1
-                    else:
-                        self.reversionlist.append([termname, origvar, orig, "F"])
-                    allmuts += 1
-        print "Reversions: ", backmuts, " in ", allmuts
+        :param term: terminal node
+        :param bparents: list of parents of all nodes in current tree
+        :param thispass: number of current imputation pass
+        :param mneighbors: neighbors collected with the msize threshold
+        :param nneighbors: neighbors collected with the nsize threshold
+        :return:
+        """
+        termname = str(term)
+        for curvar in self.indata.variantset:
+            if self.workseq[termname][curvar] in self.missing:
+                neighbors = mneighbors
+            else:
+                neighbors = nneighbors
+            newimpute = self.detect_by_parsimony(term, curvar, bparents, neighbors, thispass)
+            bnewimpute = [newimpute[0], str(newimpute[1]), newimpute[2], newimpute[3], newimpute[5]]
+            bootfront = ".".join(bnewimpute)
+            newimpute[1] = str(indata.pruned_to_full[newimpute[1]])
+            if bootfront not in self.bootreps:
+                self.bootreps[bootfront] = [0, 0]
+            if newimpute[6] == "T":
+                self.bootreps[bootfront][0] = self.bootreps[bootfront][0] + 1
+            self.bootreps[bootfront][1] = self.bootreps[bootfront][1] + 1
 
     def process_imputed(self):
+        """ Restore original locations of sequence when non-segregating sites removed.
+            Make imputations to final sequence.
+
+        """
         print "\nProcessing imputed sequences..."
         locs = []
         for curvar in indata.fullvariantset:
@@ -844,9 +1037,8 @@ class Imputation(object):
             segseq = self.workseq[fullseq.id]
 
             if len(segseq) == len(locs):
-                for site, loc in itertools.izip(segseq, locs):
+                for site, loc in itertools.izip(segseq, locs):  # Relies on original sequence of non-seg sites
                     tmpseq[loc] = site
-
 
             seqrec = SeqRecord(Seq("".join(tmpseq)), id=fullseq.id, name=fullseq.id)
             self.imputedseq.append(seqrec)
@@ -863,7 +1055,13 @@ class Imputation(object):
 
     @staticmethod
     def transversionchk(a, b, tstv):
-        # print "from " + str(a) + " to " + str(b)
+        """ Check chance whether mutation is a translation or a transversion
+
+        :param a: One site.
+        :param b: another site.
+        :param tstv: Translation/Transversion ratio.
+        :return: Translation or Transversion rate.
+        """
         if a == "A":
             if b == "G":
                 return tstv
@@ -880,12 +1078,23 @@ class Imputation(object):
             return 1 / tstv
         return -1
 
-    def backmutchk(self, term, parents, allneighbours, curvar, origseq):
+    def backmutchk(self, term, parents, allneighbours, curvar, origseq, neighborseq):
+        """ Check whether there is a reversion somewhere in the tree outside chosen neighbors of target
+        :param term: terminal node
+        :param parents: list of parents of all nodes in tree
+        :param allneighbours: set of closest neighbors chosen by user-selected method
+        :param curvar: current variant
+        :param origseq: Original state of site.
+        :param neighborseq: State of neighbors' sites.
+        :return:
+        """
         backmut = False
-        jorneighburs = []
+        origneighbors = []
+        for nb in allneighbours:
+            origneighbors.append(str(nb))
 
         curparent = parents[term]
-        while curparent in phytree.treeparents:  # Search for allele farther away
+        while curparent in parents:
             if backmut:
                 return True
             nextparent = parents[curparent]
@@ -896,18 +1105,29 @@ class Imputation(object):
                 if kidseq in self.missing:
                     continue
                 if kid not in allneighbours and kidseq == origseq:
-                    for nb in allneighbours:
-                        jorneighburs.append(str(nb))
-                    self.backmutchks.append([str(term), str(curvar), origseq, str(jorneighburs), str(kid),"T"])
+                    self.backmutchks.append(
+                        [str(term), str(indata.pruned_to_full[curvar]), origseq, self.workseq[str(term)][curvar],
+                         str(origneighbors), neighborseq,
+                         str(kid), kidseq, "T"])
                     backmut = True
+                    return True
                 allneighbours.add(kid)
             curparent = nextparent
-        for nb in allneighbours:
-            jorneighburs.append(str(nb))
-        self.backmutchks.append([str(term), str(curvar), origseq,  str(jorneighburs), "N/A","F"])
+        self.backmutchks.append(
+            [str(term), str(str(indata.pruned_to_full[curvar])), origseq, self.workseq[str(term)][curvar],
+             str(origneighbors), neighborseq, "N/A", "N/A", "F"])
         return False
 
-    def detect_by_parsimony(self, term, curvar, parents, neighbors):
+    def detect_by_parsimony(self, term, curvar, parents, neighbors, thispass):
+        """ Determine whether imputation should occur. Goes randomly through nods and site by site.
+
+        :param term: terminal node
+        :param curvar: current variant
+        :param parents: list of parents of all nodes in tree
+        :param neighbors: set of closest neighbors chosen by user-selected method
+        :param thispass: which pass of the software over the data
+        :return: list defining whether to impute and information about the site and term
+        """
 
         termname = str(term)
         finame = termname + "-" + str(curvar)
@@ -922,25 +1142,25 @@ class Imputation(object):
             nearest.add(self.workseq[str(neighbor)][curvar])
 
         if len(nearest) > 1:  # Cannot allow non-matching ever to impute sequence, thus this is first check
-            if mnm and len(nearest) == 2 and "N" in nearest:
+            if mnm and len(nearest) == msize and "N" in nearest:
                 nearest.remove("N")  # Strip the one N, allowing imputation
             else:
-                return [termname, curvar, orig, ",".join(nearest), "Neighbors Non-matching", "F"]
+                return [termname, curvar, orig, ",".join(nearest), "Neighbors Non-matching", thispass, "F"]
         if len(nearest) < 1:
-            return [termname, curvar, orig, ".", "No neighbors", "F"]
+            return [termname, curvar, orig, ".", "No Neighbors", thispass, "F"]
         only = nearest.pop()
         if orig in self.missing:
-            if len(neighbors) < 2:
-                return [termname, curvar, orig, only, "Not enough neighbors", "F"]
+            if len(neighbors) < msize:
+                return [termname, curvar, orig, only, "Not Enough Neighbors", thispass, "F"]
             elif only in self.missing:
-                return [termname, curvar, orig, only, "Neighbors All Missing", "F"]
+                return [termname, curvar, orig, only, "Neighbors All Missing", thispass, "F"]
             else:
-                return [termname, curvar, orig, only, "Imputed Missing", "T"]
+                return [termname, curvar, orig, only, "Imputed Missing", thispass, "T"]
         else:
-            if len(neighbors) < maxneighbors:
-                return [termname, curvar, orig, only, "Not enough neighbors", "F"]
+            if len(neighbors) < nsize:
+                return [termname, curvar, orig, only, "Not enough neighbors", thispass, "F"]
             if only in self.missing:
-                return [termname, curvar, orig, only, "Neighbors All Missing", "F"]
+                return [termname, curvar, orig, only, "Neighbors All Missing", thispass, "F"]
             if orig != only:  # If target sequence does not match matching non-missing neighbors
                 adtot = 0
                 thisad = 0.0
@@ -955,28 +1175,33 @@ class Imputation(object):
                         else:
                             otherad += float(a[1])
                     if adtot < mincoverage:
-                        return [termname, curvar, orig, only, "Imputed by Min. Cov.", "T"]
+                        return [termname, curvar, orig, only, "Imputed By Min. Cov.", thispass, "T"]
                     if otherad > 0.0:
                         if thisad / otherad <= adthresh:
-                            return [termname, curvar, orig, only, "Imputed by AD", "T"]
+                            return [termname, curvar, orig, only, "Imputed By AD", thispass, "T"]
                 if finame in indata.gqdict:
                     if int(indata.gqdict.get(finame)) < genoqual:
-                        return [termname, curvar, orig, only, "Imputed by GQ", "T"]
+                        return [termname, curvar, orig, only, "Imputed By GQ", thispass, "T"]
                 if nobackmutchk:
-                    return [termname, curvar, orig, only, "Imputed Non-missing", "T"]
+                    return [termname, curvar, orig, only, "Imputed Non-missing", thispass, "T"]
                 else:
-                    if self.backmutchk(term, parents, bmneighbors, curvar, orig):
-                        return [termname, curvar, orig, only, "Imputed Non-missing", "T"]
+                    if self.backmutchk(term, parents, bmneighbors, curvar, orig, only):
+                        return [termname, curvar, orig, only, "Imputed Non-missing", thispass, "T"]
                     else:
-                        return [termname, curvar, orig, only, "No Reversion", "F"]
+                        return [termname, curvar, orig, only, "No Reversion", thispass, "F"]
             else:
-                return [termname, curvar, orig, only, "Matches Neighbors", "F"]
+                return [termname, curvar, orig, only, "Matches Neighbors", thispass, "F"]
 
-    def output_imputed(self, inputfile, out, impout):
+    def output_imputed(self, inputfile, impout):
+        """ Output imputed sequence and auxilliary files.
 
+        :param inputfile: original input file
+        :param impout: switch to determine whether to print information file about imputations
+        :return:
+        """
         for imputed in self.imputelist:
             if indata.orig_vcf_pos:
-                imputed[1] = str(indata.orig_vcf_pos[imputed[1]])
+                imputed[1] = str(indata.orig_vcf_pos[int(imputed[1])])
             else:
                 imputed[1] = str(imputed[1])
 
@@ -993,16 +1218,18 @@ class Imputation(object):
         if impout:
             impoutfilename = filebase + "-impout.txt"
             impoutfile = open(impoutfilename, 'w')
-            impoutfile.write("SUBJECTID\t VAR\t FROM\t TO\t TYPE\t IMPUTED\tPASS\n")
+            if boot > 0:
+                impoutfile.write("SUBJECTID\t VAR\t FROM\t TO\t PASS\tRATIO\n")
+            else:
+                impoutfile.write("SUBJECTID\t VAR\t FROM\t TO\t TYPE\tPASS\tIMPUTED\n")
             for imputed in self.imputelist:
                 impoutfile.write("\t".join(imputed))
                 impoutfile.write("\n")
             impoutfile.close()
+
         indivoutfilename = filebase + "-indivout.txt"
         indivoutfile = open(indivoutfilename, 'w')
         indivoutfile.write("SUBJECTID\t NUM\n")
-
-
         for indiv in self.indivimputes.keys():
             indivoutfile.write(indiv)
             indivoutfile.write("\t")
@@ -1014,7 +1241,7 @@ class Imputation(object):
             indivoutfile.write("\n")
         indivoutfile.close()
 
-        if outtype == "vcf" and len(indata.reflist) >0:
+        if outtype == "vcf" and len(indata.reflist) > 0:
             outseqfile = filebase + "-out.vcf"
             outfile = open(outseqfile, 'w')
             outfile.write("##fileformat=VCFv4.1\n")
@@ -1041,7 +1268,6 @@ class Imputation(object):
                         outfile.write("\t")
                     outfile.write("\n")
 
-
         else:  # default to fasta
             outseqfile = filebase + "-seqout.fasta"
             outfile = open(outseqfile, 'w')
@@ -1057,6 +1283,7 @@ class Imputation(object):
             outfile.close()
 
         bmfile = open("backmut.txt", 'w')
+        bmfile.write("term\tvar\torigseq\torgseqchk\torigneighbors\tneighborseq\tbmkid\tkidseq\t\T/F\n")
         for bmchk in self.backmutchks:
             bmfile.write("\t".join(bmchk))
             bmfile.write("\n")
@@ -1071,19 +1298,12 @@ class Imputation(object):
             nbfile.write("\n")
 
 
-    def makemissinglist(self):
-        self.missinglist = {}
-        for seqname in self.workseq.keys():
-            miss = [i for i in xrange(len(self.workseq[seqname])) if self.workseq[seqname][i] in self.missing]
-            self.missinglist[seqname] = float(len(miss)) / float(len(self.workseq[seqname]))
-
-
 if __name__ == "__main__":
 
     print "\n****************\nIMPUTOR\n****************\n"
 
-    parser = argparse.ArgumentParser(description="IMPUTOR is a program for the phylogeny-aware imputation of: \n\n\t" \
-                                                 "mutations.\n\t" \
+    parser = argparse.ArgumentParser(description="IMPUTOR is a program for the phylogeny-aware imputation of: \n\n\t"
+                                                 "mutations.\n\t"
                                                  "- ", formatter_class=RawTextHelpFormatter)
 
     parser.add_argument('-file', metavar='<file>', help='input file: FASTA or VCF', required=True)
@@ -1097,10 +1317,13 @@ if __name__ == "__main__":
                         help='Height of search toward root for collecting neighbors.',
                         default=2)
     parser.add_argument('-maxdepth', metavar='<maxdepth>',
-                        help='Depth of search down descendent nodes for collecting neighbors.', default=2)
-    parser.add_argument('-maxneighbors', metavar='<maxneighbors>',
+                        help='Depth of search down descendent nodes for collecting neighbors.', default=3)
+    parser.add_argument('-nsize', metavar='<nsize>',
                         help='Number of neighbors that must be identical in order to impute.',
                         default=3)
+    parser.add_argument('-msize', metavar='<nsize>',
+                        help='Number of neighbors that must be identical in order to impute for missing data.',
+                        default=2)
     parser.add_argument('-mutrate', metavar='<mutrate>', help='Mutation rate.', default='8.71e-10')
     parser.add_argument('-tstv', metavar='<tstv>', help='Transition/travsersion ratio.', default='2.0')
     parser.add_argument('-out', metavar='<out>', help='Output file type: fasta or vcf', default='fasta')
@@ -1127,7 +1350,18 @@ if __name__ == "__main__":
     parser.set_defaults(local=False)
     parser.add_argument('-seqonly', dest='seqonly', help='Exit after outputting input seq.', action='store_true')
     parser.set_defaults(seqonly=False)
-
+    parser.add_argument('-boot', metavar='<boot>', help='Number of bootstrap replicates.', default=0)
+    parser.add_argument('-threshold', metavar='<threshold>', help='Bootstrap acceptance threshold.', default=0.95)
+    parser.add_argument('-runs', metavar='<runs>', help='Number of alternate runs.', default=0)
+    parser.add_argument('-maxhops', metavar='<maxhops>', help='Number of alternate runs.', default=5)
+    parser.add_argument('-kidcollect', metavar='<kidcollect>', help='rootward, hops, distance, mono',
+                        default='rootward')
+    parser.add_argument('-maxn', metavar='<maxn>',
+                        help='Maximum number of neighbors that will be searched. (For monphyly-based neighbor search.',
+                        default=5)
+    parser.add_argument('-maxjump', metavar='<maxjump>',
+                        help='.',
+                        default=5)
 
     args = parser.parse_args()
     inputfile = args.file
@@ -1138,7 +1372,8 @@ if __name__ == "__main__":
     ralg = args.ralg
     maxdepth = int(args.maxdepth)
     maxheight = int(args.maxheight)
-    maxneighbors = int(args.maxneighbors)
+    nsize = int(args.nsize)
+    msize = int(args.msize)
     mutrate = float(args.mutrate)
     tstv = float(args.tstv)
     outtype = args.out
@@ -1156,12 +1391,17 @@ if __name__ == "__main__":
     rej = bool(args.rej)
     seqonly = bool(args.seqonly)
     exlocal = bool(args.exlocal)
-
+    boot = int(args.boot)
+    threshold = float(args.threshold)
+    runs = int(args.runs)
+    maxhops = int(args.maxhops)
+    kidcollect = args.kidcollect
+    maxn = int(args.maxn)
+    maxjump = int(args.maxjump)
 
     rng = random.SystemRandom()  # Uses /dev/urandom
 
     sys.setrecursionlimit(2 ** 20)
-
 
     batchlist = []
 
@@ -1189,7 +1429,7 @@ if __name__ == "__main__":
         print "Unique stamp for temp files: ", randstamp
 
         indata = InData()
-        indata.load_input_data(inputfile=infile)
+        indata.load_input_data(infile)
 
         if seqonly:
             continue
@@ -1214,7 +1454,7 @@ if __name__ == "__main__":
         print "\n****************\nIMPUTATION\n****************\n"
         impute = Imputation(indata, phytree, mutrate)
         impute.impute()
-        impute.output_imputed(infile, outtype, impout)
+        impute.output_imputed(infile, impout)
 
 else:
     print("IMPUTOR is being imported into another module. Not yet implemented.")
