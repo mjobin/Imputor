@@ -31,7 +31,8 @@ class InData(object):
         and imputation.
     """
 
-    def __init__(self):
+    def __init__(self, minfile):
+        self.inputfile = minfile
         self.fullsequence = []  # Raw sequence input including non-segregating sites
         self.fullvariantset = set()
         self.fullvariants = {}
@@ -45,7 +46,6 @@ class InData(object):
         self.gqdict = {}
         self.addict = {}
         self.maxseqlength = 0
-        self.revrate = -1
         self.pruned_to_full = []  # list where position in list is pruned location
 
         # The eight mandatory columns of a VCF file. Here for clarity in functions below.
@@ -59,23 +59,25 @@ class InData(object):
         self.vcf_info = 7
         self.acgt = ['A', 'C', 'G', 'T']
 
+        self.load_input_data()
+
         return
 
-    def load_input_data(self, linfile):
+    def load_input_data(self):
         """ Load input data from a file.
 
-        :param linfile:
         :return:
         """
 
-        filebase, fileext = os.path.splitext(linfile)
+        filebase, fileext = os.path.splitext(self.inputfile)
         self.filebase = filebase
-        if linfile[-5:] == 'fasta':
-            self.sequence = AlignIO.read(linfile, 'fasta')
+
+        if self.inputfile[-5:] == 'fasta':
+            self.sequence = AlignIO.read(self.inputfile, 'fasta')
             self.variants_from_sequence()
             self.prune_non_seg()
-        elif linfile[-3:] == 'vcf':
-            file_data = open(linfile, 'r')
+        elif self.inputfile[-3:] == 'vcf':
+            file_data = open(self.inputfile, 'r')
             raw_data = []
             for file_line in file_data:
                 if len(file_line.rstrip()) > 0:  # Strip blank lines
@@ -85,7 +87,7 @@ class InData(object):
             expanded_file_data = self.vcf_expand_multi_allele(raw_data)
 
             # Generate sequence from only those areas with any polymorphism
-            self.seq_from_variants_excl(raw_data)
+            self.seq_from_variants(expanded_file_data)
         else:
             print "Input file must be either .fasta or .vcf"
             exit()
@@ -111,7 +113,7 @@ class InData(object):
             outreffile.write("\n")
             outreffile.close()
         if rej:
-            self.rej_infile(linfile)
+            self.rej_infile(self.inputfile)
 
         print "Finished input."
         return
@@ -131,6 +133,8 @@ class InData(object):
 
             cols = file_line.split('\t')
 
+            if cols[self.vcf_chrom] == '#CHROM':  # Header line of VCF file
+                expanded_file_data.append("\t".join(cols))
             # If the second character is a (meta-info line) or a blank line, ignore
             if (file_line[:1] == "#") or (cols[self.vcf_chrom] == '\n'):
                 continue
@@ -249,7 +253,7 @@ class InData(object):
         self.variants = {}
         self.variants_from_sequence()  # Re-run on stripped sequence
 
-    def seq_from_variants_excl(self, raw_data=None):
+    def seq_from_variants(self, raw_data=None):
         """ Create sequence using a list of variants.
 
         :param raw_data:
@@ -270,7 +274,6 @@ class InData(object):
                 else:
                     print "Error. VCF file with no genotype. Cannot create sequence data."
                     return
-
         for genotype_name in genotype_names:  # Step through data lines, constructing list of variants
             self.variants[genotype_name] = []
 
@@ -402,34 +405,39 @@ class InData(object):
 
 class PhyloTree(object):
     """A phylogenetic tree either input from phyloxml format or constructed from sequence.
+
+
     """
 
-    def __init__(self, indata):
-        self.indata = indata
-        self.impname = None
+    def __init__(self, mindata, mtreetype, mtimestamp, malpha, mrmodel, mstarttreename, mmaxthreads=4, mmaxdepth=3,
+                 mmaxheight=2, mmaxn=5):
+
+        self.indata = mindata
+        self.treetype = mtreetype
+        self.impname = "imp" + str(mtimestamp)
         self.starttreename = None
-        self.treetype = None
+        self.rmodel = mrmodel
+        self.starttreename = mstarttreename
+        self.maxthreads = mmaxthreads
+        self.maxdepth = mmaxdepth
+        self.maxheight = mmaxheight
+        self.maxn = mmaxn
         self.tree = None  # Phylogenetic tree to be loaded or constructed from data. Newick format.
         self.treeparents = {}
         self.starttree = None  # Phylogenetic tree used as starting tree in RAxML
         self.btrees = []  # Bootstrap replicates of trees. Newick format.
         self.btreeparents = []
         self.raxmlalgs = {'a', 'd', 'o'}
+        self.alpha = malpha
 
-    def input_tree(self, treetype=None, alpha=None, rmodel=None, starttreename=None, timestamp=None, maxthreads=None):
+        self.input_tree()
+
+    def input_tree(self):
         """
         Takes input tree file or sequence data.
-        :param treetype:
-        :param alpha:
-        :param rmodel:
-        :param starttreename:
-        :param timestamp:
-        :param maxthreads:
+
         :return:
         """
-        self.treetype = treetype
-        self.impname = "imp" + str(timestamp)
-        self.starttreename = starttreename
 
         if self.starttreename:
             if self.starttreename[-3:] == 'xml':
@@ -446,26 +454,25 @@ class PhyloTree(object):
         elif self.treetype == 'pars':
             self.parsimony_tree()
         elif self.treetype == 'RAxML':
-            self.raxml_tree(rmodel)
+            self.raxml_tree()
         else:
-            self.phyml_tree(alpha)
+            self.phyml_tree()
 
         self.treeparents = self.all_parents(self.tree)
         for btree in self.btrees:
             self.btreeparents.append(self.all_parents(btree))
 
-    def output_tree(self, inputfile, outtreetype):
+    def output_tree(self, outputtreetype):
         """ Outputs tree to file.
 
-        :param inputfile: original input file
-        :param outtreetype: type of tree to output
+        :param outputtreetype: type of tree to output
         :return:
         """
-        filebase, fileext = os.path.splitext(inputfile)
-        if outtreetype == 'phyloxml':
+        filebase, fileext = os.path.splitext(self.indata.inputfile)
+        if outputtreetype == 'phyloxml':
             outfile = filebase + "-outtree.xml"
             Phylo.write(self.tree, outfile, "phyloxml")
-        elif outtreetype == 'nexus':
+        elif outputtreetype == 'nexus':
             outfile = filebase + "-outtree.nexus"
             Phylo.write(self.tree, outfile, "nexus")
         else:  # Default newick
@@ -485,21 +492,21 @@ class PhyloTree(object):
                 parents[child] = clade
         return parents
 
-    def collect_kids(self, clade, kids, depth, maxdepth):
+    def collect_kids(self, clade, kids, depth, locmaxdepth):
         """ Recursive function for collecting all children to specified depth
 
+        :param locmaxdepth: local instance of maximum depth
         :param clade: current node of tree
         :param kids: list of all collected children
         :param depth: current depth of search
-        :param maxdepth: maximum depth of search
         :return:
         """
-        if depth < maxdepth:
+        if depth < locmaxdepth:
             for child in clade:
                 if child.name:
                     kids.append(child)
             for child in clade:
-                self.collect_kids(child, kids, depth + 1, maxdepth)
+                self.collect_kids(child, kids, depth + 1, locmaxdepth)
         return kids
 
     def collect_all_kids(self, clade, kids):
@@ -514,22 +521,6 @@ class PhyloTree(object):
                 kids.append(child)
             self.collect_all_kids(child, kids)
         return kids
-
-    @staticmethod
-    def get_siblings(clade):
-        """ Get siblings of a clade.
-
-        :param clade: input clade
-        :return: siblings
-        """
-        siblings = []
-        if clade in phytree.treeparents:  # Will not go past the root clade
-            for kid in phytree.treeparents[clade]:
-                if kid == clade:
-                    pass
-                else:
-                    siblings.append(kid)
-        return siblings
 
     def neighbors_by_distance(self, term, terms, tsize):
         """ Function for collecting all children of clade
@@ -555,14 +546,13 @@ class PhyloTree(object):
             neighbors.add(sorted_neb[i][0])
         return neighbors
 
-    def neighbors_by_mono(self, term, ctree, parents, tsize, maxn):
+    def neighbors_by_mono(self, term, ctree, parents, tsize):
         """ Collect neighbors of minimum sized monophyletic clade including term.
 
         :param term: current node of tree
         :param ctree: current tree
         :param parents: list of parents of nodes
         :param tsize: threshold number of neighbors
-        :param maxn: maximum number of neighbors to search for monophyly
         :return: set of closest neighbors
         """
         neighbors = set()
@@ -580,7 +570,7 @@ class PhyloTree(object):
                     monn.add(kid)
                     if len(neighbors) >= tsize and ctree.is_monophyletic(monn):
                         return neighbors
-                    if len(neighbors) > maxn:
+                    if len(neighbors) > self.maxn:
                         return set()
             curnode = curparent
         return set()
@@ -633,14 +623,12 @@ class PhyloTree(object):
             neighbors.add(sorted_neb[i][0])
         return neighbors
 
-    def neighbors_by_rootward(self, term, parents, height, maxheight, maxdepth, tsize):
+    def neighbors_by_rootward(self, term, parents, height, tsize):
         """
 
         :param term: current node of tree
         :param parents: list of parents of nodes
         :param height:
-        :param maxheight: maximum height to ascend toward root
-        :param maxdepth: maximum depth to descend from each node in search of children
         :param tsize: threshold number of neighbors
         :return: set of closest neighbors
         """
@@ -650,10 +638,10 @@ class PhyloTree(object):
         while len(neighbors) < tsize:
             if curnode not in parents:  # will not go past the root
                 break
-            if height > maxheight:
+            if height > self.maxheight:
                 break
             curparent = parents[curnode]
-            allkids = self.collect_kids(curparent, [], 0, maxdepth)
+            allkids = self.collect_kids(curparent, [], 0, self.maxdepth)
             for kid in allkids:
                 if kid is not term:
                     neighbors.add(kid)
@@ -682,7 +670,7 @@ class PhyloTree(object):
         reducedtempfastafile = self.indata.filebase + self.impname + "_fastatmp.fasta.reduced"
         AlignIO.write(self.indata.sequence, tempfastafile, "fasta")
 
-        raxml_args = {"sequences": tempfastafile, "model": rmodel, "name": self.impname,
+        raxml_args = {"sequences": tempfastafile, "model": self.rmodel, "name": self.impname,
                       "parsimony_seed": rng.randint(0, sys.maxint), "threads": cpus, "parsimony": True,
                       "algorithm": ralg}
 
@@ -721,12 +709,9 @@ class PhyloTree(object):
         except OSError:
             pass
 
-    def raxml_tree(self, rmodel=None):
+    def raxml_tree(self):
         """ Constructs a tree via maximum likelihood by invoking external software RAxML.
             See docs for RAxML installation and setup.
-
-            Keyword arguments:
-            rmodel -- model type for input into RAxML.
 
         """
         cpus = multiprocessing.cpu_count()
@@ -743,7 +728,7 @@ class PhyloTree(object):
         reducedtempfastafile = self.indata.filebase + self.impname + "_fastatmp.fasta.reduced"
         AlignIO.write(self.indata.sequence, tempfastafile, "fasta")
 
-        raxml_args = {"sequences": tempfastafile, "model": rmodel, "name": self.impname,
+        raxml_args = {"sequences": tempfastafile, "model": self.rmodel, "name": self.impname,
                       "parsimony_seed": rng.randint(0, sys.maxint), "threads": cpus}
 
         if boot > 0:
@@ -801,7 +786,7 @@ class PhyloTree(object):
         except OSError:
             pass
 
-    def phyml_tree(self, alpha=None):
+    def phyml_tree(self):
         """ Constructs a tree via maximum likelihood by invoking external software PhyML.
             See docs for PhyML installation and setup.
 
@@ -847,13 +832,13 @@ class Imputation(object):
             mutrate -- Mutation rate.
     """
 
-    def __init__(self, indata, phytree, mutrate):
-        self.cpucount = multiprocessing.cpu_count()
+    def __init__(self, mindata, mphytree, mmutrate=8.71e-10, mtstv=2.0):
         self.workseq = {}
         self.imputedseq = MultipleSeqAlignment([])
-        self.indata = indata
-        self.phytree = phytree
-        self.mu = mutrate
+        self.indata = mindata
+        self.phytree = mphytree
+        self.mu = mmutrate
+        self.tstv = mtstv
         self.imputelist = []
         self.multi = multi
         self.acgt = {'A', 'C', 'G', 'T'}
@@ -906,14 +891,12 @@ class Imputation(object):
                             mneighbors = phytree.neighbors_by_distance(term, terms, msize)
                         elif kidcollect == 'mono':
                             nneighbors = phytree.neighbors_by_mono(term, self.phytree.tree, self.phytree.treeparents,
-                                                                   nsize, maxn)
+                                                                   nsize)
                             mneighbors = phytree.neighbors_by_mono(term, self.phytree.tree, self.phytree.treeparents,
-                                                                   msize, maxn)
+                                                                   msize)
                         else:
-                            nneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, maxheight,
-                                                                       maxdepth, nsize)
-                            mneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, maxheight,
-                                                                       maxdepth, msize)
+                            nneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, nsize)
+                            mneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, msize)
                         self.impute_bootstrap(term, bparents, str(i + 1), mneighbors, nneighbors)
                 for bootrep in self.bootreps:
                     newimpute = bootrep.split(".")
@@ -948,14 +931,12 @@ class Imputation(object):
                         mneighbors = phytree.neighbors_by_distance(term, terms, msize)
                     elif kidcollect == 'mono':
                         nneighbors = phytree.neighbors_by_mono(term, self.phytree.tree, self.phytree.treeparents,
-                                                               nsize, maxn)
+                                                               nsize)
                         mneighbors = phytree.neighbors_by_mono(term, self.phytree.tree, self.phytree.treeparents,
-                                                               msize, maxn)
+                                                               msize)
                     else:
-                        nneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, maxheight,
-                                                                   maxdepth, nsize)
-                        mneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, maxheight,
-                                                                   maxdepth, msize)
+                        nneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, nsize)
+                        mneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, msize)
 
                     self.impute_threshold(term, self.phytree.treeparents, str(i + 1),
                                           mneighbors, nneighbors)
@@ -1053,29 +1034,27 @@ class Imputation(object):
                             self.newvariants[i].append(seq.seq[i])
         self.imputedseq.sort()
 
-    @staticmethod
-    def transversionchk(a, b, tstv):
+    def transversionchk(self, a, b):
         """ Check chance whether mutation is a translation or a transversion
 
         :param a: One site.
         :param b: another site.
-        :param tstv: Translation/Transversion ratio.
         :return: Translation or Transversion rate.
         """
         if a == "A":
             if b == "G":
-                return tstv
+                return self.tstv
         if a == "G":
             if b == "A":
-                return tstv
+                return self.tstv
         if a == "C":
             if b == "T":
-                return tstv
+                return self.tstv
         if a == "T":
             if b == "C":
-                return tstv
+                return self.tstv
         if a in ("A", "C", "G", "T") and b in ("A", "C", "G", "T"):
-            return 1 / tstv
+            return 1 / self.tstv
         return -1
 
     def backmutchk(self, term, parents, allneighbours, curvar, origseq, neighborseq):
@@ -1109,7 +1088,6 @@ class Imputation(object):
                         [str(term), str(indata.pruned_to_full[curvar]), origseq, self.workseq[str(term)][curvar],
                          str(origneighbors), neighborseq,
                          str(kid), kidseq, "T"])
-                    backmut = True
                     return True
                 allneighbours.add(kid)
             curparent = nextparent
@@ -1192,11 +1170,10 @@ class Imputation(object):
             else:
                 return [termname, curvar, orig, only, "Matches Neighbors", thispass, "F"]
 
-    def output_imputed(self, inputfile, impout):
+    def output_imputed(self, limpout):
         """ Output imputed sequence and auxilliary files.
 
-        :param inputfile: original input file
-        :param impout: switch to determine whether to print information file about imputations
+        :param limpout: switch to determine whether to print information file about imputations
         :return:
         """
         for imputed in self.imputelist:
@@ -1214,8 +1191,8 @@ class Imputation(object):
                 print "\n"
             print impute.imputedseq
 
-        filebase, fileext = os.path.splitext(inputfile)
-        if impout:
+        filebase, fileext = os.path.splitext(indata.inputfile)
+        if limpout:
             impoutfilename = filebase + "-impout.txt"
             impoutfile = open(impoutfilename, 'w')
             if boot > 0:
@@ -1312,7 +1289,7 @@ if __name__ == "__main__":
     parser.add_argument('-outtree', metavar='<outtree>', help='Output format for tree', default='newick')
     parser.add_argument('-alpha', metavar='<alpha>', help='Value of gamma shape parameter.', default='e')
     parser.add_argument('-rmodel', metavar='<rmodel>', help='Model type for RaXML.', default='GTRCAT')
-    parser.add_argument('-ralg', metavar='<rmodel>', help='Algorithm type for RaXML.', default='d')
+    parser.add_argument('-ralg', metavar='<ralg>', help='Algorithm type for RaXML.', default='d')
     parser.add_argument('-maxheight', metavar='<maxheight>',
                         help='Height of search toward root for collecting neighbors.',
                         default=2)
@@ -1324,7 +1301,7 @@ if __name__ == "__main__":
     parser.add_argument('-msize', metavar='<nsize>',
                         help='Number of neighbors that must be identical in order to impute for missing data.',
                         default=2)
-    parser.add_argument('-mutrate', metavar='<mutrate>', help='Mutation rate.', default='8.71e-10')
+    parser.add_argument('-mutrate', metavar='<mutrate>', help='Mutation rate.', default=8.71e-10)
     parser.add_argument('-tstv', metavar='<tstv>', help='Transition/travsersion ratio.', default='2.0')
     parser.add_argument('-out', metavar='<out>', help='Output file type: fasta or vcf', default='fasta')
     parser.add_argument('-impout', metavar='<impout>', help='Output list of imputed mutations', default=True)
@@ -1428,33 +1405,30 @@ if __name__ == "__main__":
         print "\n\n****************\nInput file:", infile, "\n****************"
         print "Unique stamp for temp files: ", randstamp
 
-        indata = InData()
-        indata.load_input_data(infile)
+        indata = InData(infile)
 
         if seqonly:
             continue
 
-        phytree = PhyloTree(indata)
-        phytree.input_tree(treetype=treetype, alpha=alpha, rmodel=rmodel, starttreename=starttree,
-                           timestamp=randstamp,
-                           maxthreads=maxthreads)
+        phytree = PhyloTree(indata, treetype, randstamp, alpha, rmodel, starttree, maxthreads, maxdepth, maxheight,
+                            maxn)
 
         if verbose:
             print "\n****************\nVARIANTS\n****************\n"
-            for i in indata.variants.keys():
-                print i + ": " + str(indata.variants[i])
+            for gi in indata.variants.keys():
+                print gi + ": " + str(indata.variants[gi])
 
             print "\n****************\nSEQUENCE\n****************\n"
             print indata.sequence
 
             print "\n****************\nTREE\n****************\n"
             Phylo.draw_ascii(phytree.tree)
-        phytree.output_tree(infile, outtreetype)
+        phytree.output_tree(outtreetype)
 
         print "\n****************\nIMPUTATION\n****************\n"
-        impute = Imputation(indata, phytree, mutrate)
+        impute = Imputation(indata, phytree, mutrate, tstv)
         impute.impute()
-        impute.output_imputed(infile, impout)
+        impute.output_imputed(impout)
 
 else:
     print("IMPUTOR is being imported into another module. Not yet implemented.")
