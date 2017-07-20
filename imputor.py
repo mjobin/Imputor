@@ -33,7 +33,7 @@ class InData(object):
 
     def __init__(self, minfile):
         self.inputfile = minfile
-        self.fullsequence = []  # Raw sequence input including non-segregating sites
+        self.fullsequence = MultipleSeqAlignment([])  # Raw sequence input including non-segregating sites
         self.fullvariantset = set()
         self.fullvariants = {}
         self.sequence = MultipleSeqAlignment([])
@@ -453,13 +453,15 @@ class PhyloTree(object):
             self.tree = Phylo.read(self.treetype, "newick")
         elif self.treetype == 'pars':
             self.parsimony_tree()
-        elif self.treetype == 'RAxML':
-            self.raxml_tree()
-        else:
+        elif self.treetype == 'PhyML':
             self.phyml_tree()
+        else:
+            self.raxml_tree()
 
+        self.tree.collapse_all(lambda c: c.branch_length <= 0.0)
         self.treeparents = self.all_parents(self.tree)
         for btree in self.btrees:
+            btree.collapse_all(lambda c: c.branch_length <= 0.0)
             self.btreeparents.append(self.all_parents(btree))
 
     def output_tree(self, outputtreetype):
@@ -623,7 +625,7 @@ class PhyloTree(object):
             neighbors.add(sorted_neb[i][0])
         return neighbors
 
-    def neighbors_by_rootward(self, term, parents, height, tsize):
+    def neighbors_by_rootward(self, term, parents, height, tsize, ctree):
         """
 
         :param term: current node of tree
@@ -635,18 +637,34 @@ class PhyloTree(object):
         neighbors = set()
         curnode = term
         # Collect closest neighbors on tree
+
+        # print "TARGET: ", str(term)
         while len(neighbors) < tsize:
             if curnode not in parents:  # will not go past the root
                 break
             if height > self.maxheight:
                 break
             curparent = parents[curnode]
+
+            # print "\tPARENT: ", str(curparent)
             allkids = self.collect_kids(curparent, [], 0, self.maxdepth)
+
+            # ndist = {}
+            # for neb in allkids:
+            #     if len(ctree.trace(term, neb)) <= maxhops:
+            #         ndist[neb] = ctree.distance(term, neb)
+            # sorted_neb = sorted(ndist.items(), key=operator.itemgetter(1))
+
+            addedkids = 0
             for kid in allkids:
                 if kid is not term:
+                    # print "\t\tADD KID: ", str(kid)
+                    addedkids += 1
                     neighbors.add(kid)
                     if len(neighbors) >= tsize:
                         break
+            if addedkids == 0:
+                break
             curnode = curparent
             height += 1
         return neighbors
@@ -859,11 +877,11 @@ class Imputation(object):
 
         """
 
-        if kidcollect == 'hops':
+        if ncollect == 'hops':
             print "HOPS"
-        elif kidcollect == 'distance':
+        elif ncollect == 'distance':
             print "DISTANCE"
-        elif kidcollect == 'mono':
+        elif ncollect == 'mono':
             print "MONO"
         else:
             print "ROOTWARD"
@@ -881,22 +899,22 @@ class Imputation(object):
                     random.shuffle(terms)
                     bparents = next(bpar)
                     for term in terms:
-                        if kidcollect == 'hops':
+                        if ncollect == 'hops':
                             nneighbors = phytree.neighbors_by_hops(term, self.phytree.tree, self.phytree.treeparents,
                                                                    nsize)
                             mneighbors = phytree.neighbors_by_hops(term, self.phytree.tree, self.phytree.treeparents,
                                                                    msize)
-                        elif kidcollect == 'distance':
+                        elif ncollect == 'distance':
                             nneighbors = phytree.neighbors_by_distance(term, terms, nsize)
                             mneighbors = phytree.neighbors_by_distance(term, terms, msize)
-                        elif kidcollect == 'mono':
+                        elif ncollect == 'mono':
                             nneighbors = phytree.neighbors_by_mono(term, self.phytree.tree, self.phytree.treeparents,
                                                                    nsize)
                             mneighbors = phytree.neighbors_by_mono(term, self.phytree.tree, self.phytree.treeparents,
                                                                    msize)
                         else:
-                            nneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, nsize)
-                            mneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, msize)
+                            nneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, nsize, self.phytree.tree)
+                            mneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, msize, self.phytree.tree)
                         self.impute_bootstrap(term, bparents, str(i + 1), mneighbors, nneighbors)
                 for bootrep in self.bootreps:
                     newimpute = bootrep.split(".")
@@ -922,21 +940,21 @@ class Imputation(object):
                 bar = progressbar.ProgressBar()
                 for p in bar(range(len(terms))):
                     term = terms[p]
-                    # for term in terms:
-                    if kidcollect == 'hops':
+                # for term in terms:
+                    if ncollect == 'hops':
                         nneighbors = phytree.neighbors_by_hops(term, self.phytree.tree, self.phytree.treeparents, nsize)
                         mneighbors = phytree.neighbors_by_hops(term, self.phytree.tree, self.phytree.treeparents, msize)
-                    elif kidcollect == 'distance':
+                    elif ncollect == 'distance':
                         nneighbors = phytree.neighbors_by_distance(term, terms, nsize)
                         mneighbors = phytree.neighbors_by_distance(term, terms, msize)
-                    elif kidcollect == 'mono':
+                    elif ncollect == 'mono':
                         nneighbors = phytree.neighbors_by_mono(term, self.phytree.tree, self.phytree.treeparents,
                                                                nsize)
                         mneighbors = phytree.neighbors_by_mono(term, self.phytree.tree, self.phytree.treeparents,
                                                                msize)
                     else:
-                        nneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, nsize)
-                        mneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, msize)
+                        nneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, nsize, self.phytree.tree)
+                        mneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, msize, self.phytree.tree)
 
                     self.impute_threshold(term, self.phytree.treeparents, str(i + 1),
                                           mneighbors, nneighbors)
@@ -1072,13 +1090,18 @@ class Imputation(object):
         for nb in allneighbours:
             origneighbors.append(str(nb))
 
-        curparent = parents[term]
-        while curparent in parents:
+        # print "\n", term
+        curnode = term
+
+
+        while curnode in parents:
             if backmut:
                 return True
-            nextparent = parents[curparent]
+            curparent = parents[curnode]
+            # nextparent = parents[curparent]
             empty = []
             allkids = phytree.collect_all_kids(curparent, empty)
+            # print "ak ", len(allkids)
             for kid in allkids:
                 kidseq = self.workseq[str(kid)][curvar]
                 if kidseq in self.missing:
@@ -1088,12 +1111,14 @@ class Imputation(object):
                         [str(term), str(indata.pruned_to_full[curvar]), origseq, self.workseq[str(term)][curvar],
                          str(origneighbors), neighborseq,
                          str(kid), kidseq, "T"])
+                    # print "Found BM neighbors: ", len(allneighbours)
                     return True
                 allneighbours.add(kid)
-            curparent = nextparent
+            curnode = curparent
         self.backmutchks.append(
             [str(term), str(str(indata.pruned_to_full[curvar])), origseq, self.workseq[str(term)][curvar],
              str(origneighbors), neighborseq, "N/A", "N/A", "F"])
+        # print term, " NO BM neighbors: ", len(allneighbours)
         return False
 
     def detect_by_parsimony(self, term, curvar, parents, neighbors, thispass):
@@ -1331,7 +1356,7 @@ if __name__ == "__main__":
     parser.add_argument('-threshold', metavar='<threshold>', help='Bootstrap acceptance threshold.', default=0.95)
     parser.add_argument('-runs', metavar='<runs>', help='Number of alternate runs.', default=0)
     parser.add_argument('-maxhops', metavar='<maxhops>', help='Number of alternate runs.', default=5)
-    parser.add_argument('-kidcollect', metavar='<kidcollect>', help='rootward, hops, distance, mono',
+    parser.add_argument('-ncollect', metavar='<ncollect>', help='rootward, hops, distance, mono',
                         default='rootward')
     parser.add_argument('-maxn', metavar='<maxn>',
                         help='Maximum number of neighbors that will be searched. (For monphyly-based neighbor search.',
@@ -1372,9 +1397,10 @@ if __name__ == "__main__":
     threshold = float(args.threshold)
     runs = int(args.runs)
     maxhops = int(args.maxhops)
-    kidcollect = args.kidcollect
+    ncollect = args.ncollect
     maxn = int(args.maxn)
     maxjump = int(args.maxjump)
+
 
     rng = random.SystemRandom()  # Uses /dev/urandom
 
