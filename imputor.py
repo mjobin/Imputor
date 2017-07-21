@@ -865,7 +865,7 @@ class Imputation(object):
         self.neighbors = {}
         self.missinglist = {}
         self.newvariants = []
-        self.backmutchks = []
+        # self.backmutchks = []
         self.bootreps = {}
 
         for seq in indata.sequence:
@@ -1107,17 +1107,17 @@ class Imputation(object):
                 if kidseq in self.missing:
                     continue
                 if kid not in allneighbours and kidseq == origseq:
-                    self.backmutchks.append(
-                        [str(term), str(indata.pruned_to_full[curvar]), origseq, self.workseq[str(term)][curvar],
-                         str(origneighbors), neighborseq,
-                         str(kid), kidseq, "T"])
+                    # self.backmutchks.append(
+                    #     [str(term), str(indata.pruned_to_full[curvar]), origseq, self.workseq[str(term)][curvar],
+                    #      str(origneighbors), neighborseq,
+                    #      str(kid), kidseq, "T"])
                     # print "Found BM neighbors: ", len(allneighbours)
                     return True
                 allneighbours.add(kid)
             curnode = curparent
-        self.backmutchks.append(
-            [str(term), str(str(indata.pruned_to_full[curvar])), origseq, self.workseq[str(term)][curvar],
-             str(origneighbors), neighborseq, "N/A", "N/A", "F"])
+        # self.backmutchks.append(
+        #     [str(term), str(str(indata.pruned_to_full[curvar])), origseq, self.workseq[str(term)][curvar],
+        #      str(origneighbors), neighborseq, "N/A", "N/A", "F"])
         # print term, " NO BM neighbors: ", len(allneighbours)
         return False
 
@@ -1284,20 +1284,20 @@ class Imputation(object):
                 outfile.write("\n")
             outfile.close()
 
-        bmfile = open("backmut.txt", 'w')
-        bmfile.write("term\tvar\torigseq\torgseqchk\torigneighbors\tneighborseq\tbmkid\tkidseq\t\T/F\n")
-        for bmchk in self.backmutchks:
-            bmfile.write("\t".join(bmchk))
-            bmfile.write("\n")
-
-        nbfile = open("neighbors.txt", 'w')
-        for nb in self.neighbors.keys():
-            nbfile.write(str(nb))
-            nbfile.write("\t:\t")
-            for nbb in self.neighbors[nb]:
-                nbfile.write(str(nbb))
-                nbfile.write("\t")
-            nbfile.write("\n")
+        # bmfile = open("backmut.txt", 'w')
+        # bmfile.write("term\tvar\torigseq\torgseqchk\torigneighbors\tneighborseq\tbmkid\tkidseq\t\T/F\n")
+        # for bmchk in self.backmutchks:
+        #     bmfile.write("\t".join(bmchk))
+        #     bmfile.write("\n")
+        #
+        # nbfile = open("neighbors.txt", 'w')
+        # for nb in self.neighbors.keys():
+        #     nbfile.write(str(nb))
+        #     nbfile.write("\t:\t")
+        #     for nbb in self.neighbors[nb]:
+        #         nbfile.write(str(nbb))
+        #         nbfile.write("\t")
+        #     nbfile.write("\n")
 
 
 if __name__ == "__main__":
