@@ -482,7 +482,7 @@ class PhyloTree(object):
             outfile = filebase + "-outtree.nexus"
             Phylo.write(self.tree, outfile, "nexus")
         else:  # Default newick
-            outfile = filebase + "-outtree.newick"
+            outfile = filebase + "-outtree.nwk"
             Phylo.write(self.tree, outfile, "newick")
 
     @staticmethod
@@ -1333,7 +1333,7 @@ if __name__ == "__main__":
     parser.add_argument('-nsize', metavar='<nsize>',
                         help='Number of neighbors that must be identical in order to impute.',
                         default=3)
-    parser.add_argument('-msize', metavar='<nsize>',
+    parser.add_argument('-msize', metavar='<msize>',
                         help='Number of neighbors that must be identical in order to impute for missing data.',
                         default=2)
     parser.add_argument('-mutrate', metavar='<mutrate>', help='Mutation rate.', default=8.71e-10)
