@@ -1,4 +1,4 @@
-# Imputor
+#!/usr/bin/python
 
 """ Imputor - software for imputing missing and non-missing mutations in sequence data by the use
     of phylogenetic trees.
@@ -11,6 +11,7 @@ import argparse
 import glob
 import multiprocessing
 import os
+import gzip
 import random
 import sys
 import re
@@ -60,6 +61,7 @@ class InData(object):
         self.vcf_filter = 6
         self.vcf_info = 7
         self.acgt = ['A', 'C', 'G', 'T']
+        self.missing = ['-', 'N', '?']
 
         self.load_input_data()
 
@@ -71,8 +73,8 @@ class InData(object):
         :return:
         """
 
-        filebase, fileext = os.path.splitext(self.inputfile)
-        self.filebase = filebase
+        filecols = self.inputfile.split(".")
+        self.filebase = filecols[0]
 
         if self.inputfile[-5:] == 'fasta':
             self.sequence = AlignIO.read(self.inputfile, 'fasta')
@@ -84,18 +86,24 @@ class InData(object):
             for file_line in file_data:
                 if len(file_line.rstrip()) > 0:  # Strip blank lines
                     raw_data.append(file_line.rstrip())
+            self.seq_from_variants(raw_data)
+        elif self.inputfile[-6:] == 'vcf.gz':
+            file_data = gzip.open(self.inputfile, 'r')
+            raw_data = []
+            for file_line in file_data:
+                if len(file_line.rstrip()) > 0:  # Strip blank lines
+                    raw_data.append(file_line.rstrip())
 
-            # Split multi-allelic sites
-            expanded_file_data = self.vcf_expand_multi_allele(raw_data)
-
-            # Generate sequence from only those areas with any polymorphism
-            self.seq_from_variants(expanded_file_data)
+            self.seq_from_variants(raw_data)
         else:
-            print "Input file must be either .fasta or .vcf"
+            print "Input file must be either .fasta, .vcf, or .vcf.gz"
             exit()
 
         if verbose:
-            outseqfile = filebase + "-indata.fasta"
+            outseqfile = self.filebase
+            if not seqonly:
+                outseqfile = outseqfile + "-indata"
+            outseqfile = outseqfile + ".fasta"
             outfile = open(outseqfile, 'w')
             outseq = {}
             for seq in self.sequence:
@@ -108,7 +116,7 @@ class InData(object):
                 outfile.write("\n")
             outfile.close()
             if self.inputfile[-3:] == 'vcf':
-                outreffilename = filebase + "-indata-ref.fasta"
+                outreffilename = self.filebase + "-indata-ref.fasta"
                 outreffile = open(outreffilename, 'w')
                 outreffile.write(">REF")
                 outreffile.write("\n")
@@ -121,60 +129,40 @@ class InData(object):
         print "Finished input."
         return
 
-    def vcf_expand_multi_allele(self, in_data=None):
-        """ Processes multiple ALT alleles in a VCF file. Returns expanded data in list form.
-
-        :param in_data:
-        :return:
-        """
-        expanded_file_data = []
-        print "\nExpanding multi-allele entries..."
-        bar = progressbar.ProgressBar(redirect_stdout=True)
-        for i in bar(range(len(in_data))):
-            file_line = in_data[i]
-
-            cols = file_line.split('\t')
-
-            if cols[self.vcf_chrom] == '#CHROM':  # Header line of VCF file
-                expanded_file_data.append("\t".join(cols))
-            # If the second character is a (meta-info line) or a blank line, ignore
-            if (file_line[:1] == "#") or (cols[self.vcf_chrom] == '\n'):
-                continue
-            if "," in cols[self.vcf_alt]:
-                multi_allele = cols[self.vcf_alt].split(",")
-                for allele in multi_allele:
-                    allele_cols = cols
-                    # Replace the ALT column with just this allele
-                    allele_cols[self.vcf_alt] = allele
-                    # Place line with just this allele in the expanded data
-                    expanded_file_data.append("\t".join(allele_cols))
-            else:
-                expanded_file_data.append(file_line)
-        return expanded_file_data
-
     def vcf_snp_prune(self, in_data=None):
-        """ Returns a VCF file including only lines containing SNPs.
+        """ Returns data including only lines containing SNPs.
 
         :param in_data:
         :return:
         """
         snps_data = []
         print "\nPruning non-SNP entries..."
-        bar = progressbar.ProgressBar()
+        bar = progressbar.ProgressBar(redirect_stdout=True)
         for i in bar(range(len(in_data))):
             file_line = in_data[i]
-
             cols = file_line.split('\t')
+
             # If the second character is a (meta-info line) or a blank line, ignore
-            if (file_line[:1] == "#") or (cols[self.vcf_chrom] == '\n'):
+            if (file_line[:1] == "#") or (cols[self.vcf_chrom] == '\n') or len(file_line) < 1:
                 continue
-            # if len(cols[self.vcf_ref]) > 1 or len(cols[self.vcf_alt]) > 1:  # if not a snp
-            #     continue
-            # elif cols[self.vcf_ref] == '-' or cols[self.vcf_alt] == '-': # if not a snp
-            #     continue
-            # elif cols[self.vcf_ref] == '.' or cols[self.vcf_alt] == '.': # if not a snp
-            #     continue
-            snps_data.append(file_line)
+            cols[self.vcf_ref] = cols[self.vcf_ref].upper()
+            cols[self.vcf_alt] = cols[self.vcf_alt].upper()
+            if len(cols[self.vcf_ref]) > 1:  # if not a snp
+                continue
+            elif(cols[self.vcf_ref] not in self.acgt): # if not a snp
+                continue
+            else:
+                alt_alleles = cols[self.vcf_alt].split(",")  # List of ALT alleles for this row
+                goodalt = True
+                for allele_pos, chk_allele in enumerate(alt_alleles):  # Iterates through the alleles
+                    if len(chk_allele) > 1:
+                        goodalt = False
+                    if chk_allele in self.missing:
+                        alt_alleles[allele_pos] = "."
+                if goodalt:
+                    cols[self.vcf_alt] = ",".join(alt_alleles)
+                    clean_file_line = "\t".join(cols)
+                    snps_data.append(clean_file_line)
         return snps_data
 
     def variants_from_sequence(self):
@@ -265,7 +253,7 @@ class InData(object):
         print "\nCollecting genotype names..."
         genotype_names = []
         genotype_sequence = {}
-        bar = progressbar.ProgressBar(redirect_stdout=True)
+        bar = progressbar.ProgressBar()
         for i in bar(range(len(raw_data))):
             file_line = raw_data[i]
             cols = file_line.split('\t')
@@ -286,7 +274,9 @@ class InData(object):
         bar = progressbar.ProgressBar(redirect_stdout=True)
         for i in bar(range(len(snps_data))):
             file_line = snps_data[i]
+
             cols = file_line.split('\t')
+
             if int(cols[self.vcf_pos]) > self.maxseqlength:
                 self.maxseqlength = int(cols[self.vcf_pos])
             self.orig_vcf_pos.append(cols[self.vcf_pos])
@@ -295,13 +285,13 @@ class InData(object):
             if (file_line[:1] == "#") or (cols[self.vcf_chrom] == '\n' or cols[self.vcf_info + 1][:2] != "GT"):
                 continue
             formatcols = cols[self.vcf_info + 1].split(":")
-
             indiv_genotypes = cols[self.vcf_info + 2:]  # Assumes all rows same length, as per VCF standard
             for position, indiv_genotype in enumerate(
                     indiv_genotypes):  # Iterates through that row of genotypes for this site
                 genotypecols = indiv_genotype.split(":")
                 assigned_alleles = re.split(  # VCF standard GT always first column
                     "[/|]+", genotypecols[0])  # Split genotype entry on either character phased or unphased
+
                 changed_genotype_names = []
                 for allele_pos, assigned_allele in enumerate(assigned_alleles):  # Iterates through the alleles
                     changed_genotype_name = genotype_names[position]
@@ -314,21 +304,20 @@ class InData(object):
                         genotype_sequence[changed_genotype_name] = []
 
                 alt_alleles = cols[self.vcf_alt].split(",")  # List of ALT alleles for this row
+
                 for allele_pos, assigned_allele in enumerate(assigned_alleles):  # Iterates through the alleles
                     if assigned_allele == "0":  # Assigned_allele will be 0 for REF and >0 for any ALT
                         genotype_sequence[changed_genotype_names[allele_pos]].append(cols[self.vcf_ref])
                     elif assigned_allele == ".":  # VCF format code for missing allele
                         genotype_sequence[changed_genotype_names[allele_pos]].append("N")
                     else:
-                        genotype_sequence[changed_genotype_names[allele_pos]].append(
-                            alt_alleles[int(assigned_allele) - 1])
+                        genotype_sequence[changed_genotype_names[allele_pos]].append(alt_alleles[int(assigned_allele) - 1])
                         self.variantset.add(var_count)
                         if changed_genotype_names[allele_pos] in self.variants:  # Keys added to self.variants here
                             self.variants[changed_genotype_names[allele_pos]].append(var_count)
                         else:
                             self.variants[changed_genotype_names[allele_pos]] = []
                             self.variants[changed_genotype_names[allele_pos]].append(var_count)
-
                 # Now dictionary of all genotype info
                 for fi in range(len(formatcols)):
                     if fi < len(genotypecols):
@@ -372,8 +361,7 @@ class InData(object):
         :return:
         """
 
-        filebase, fileext = os.path.splitext(linfile)
-        rejfilename = filebase + "-rej.txt"
+        rejfilename = self.filebase + "-rej.txt"
 
         rejfile = open(rejfilename, 'w')
         rejfile.write("/--Data\n")
@@ -474,15 +462,14 @@ class PhyloTree(object):
         :param outputtreetype: type of tree to output
         :return:
         """
-        filebase, fileext = os.path.splitext(self.indata.inputfile)
         if outputtreetype == 'phyloxml':
-            outfile = filebase + "-outtree.xml"
+            outfile = self.indata.filebase + "-outtree.xml"
             Phylo.write(self.tree, outfile, "phyloxml")
         elif outputtreetype == 'nexus':
-            outfile = filebase + "-outtree.nexus"
+            outfile = self.indata.filebase + "-outtree.nexus"
             Phylo.write(self.tree, outfile, "nexus")
         else:  # Default newick
-            outfile = filebase + "-outtree.nwk"
+            outfile = self.indata.filebase + "-outtree.nwk"
             Phylo.write(self.tree, outfile, "newick")
 
     @staticmethod
@@ -615,15 +602,6 @@ class PhyloTree(object):
         for i in xrange(len(sorted_neb)):
             if i >= tsize:
                 break
-            if i == 1:  # Special case of large initial jump to first neighbour
-                if sorted_neb[i][1] > 0.0 and sorted_neb[i - 1][1] > 0.0:
-                    if sorted_neb[i - 1][1] / sorted_neb[i][1] > maxjump:
-                        neighbors.remove(sorted_neb[i - 1][0])
-                        break
-            if i > 0:
-                if sorted_neb[i][1] > 0.0 and sorted_neb[i - 1][1] > 0.0:
-                    if sorted_neb[i][1] / sorted_neb[i - 1][1] > maxjump:
-                        break
             monn.add(sorted_neb[i][0])
             neighbors.add(sorted_neb[i][0])
         return neighbors
@@ -1226,9 +1204,8 @@ class Imputation(object):
                 print "\n"
             print impute.imputedseq
 
-        filebase, fileext = os.path.splitext(indata.inputfile)
         if limpout:
-            impoutfilename = filebase + "-impout.txt"
+            impoutfilename = indata.filebase + "-impout.txt"
             impoutfile = open(impoutfilename, 'w')
             if boot > 0 or runs > 0:
                 impoutfile.write("SUBJECTID\t VAR\t FROM\t TO\t PASS\tRATIO\tIMPUTED\n")
@@ -1239,7 +1216,7 @@ class Imputation(object):
                 impoutfile.write("\n")
             impoutfile.close()
 
-        indivoutfilename = filebase + "-indivout.txt"
+        indivoutfilename = indata.filebase + "-indivout.txt"
         indivoutfile = open(indivoutfilename, 'w')
         indivoutfile.write("SUBJECTID\tNUM\tVARS\n")
         for indiv in sorted(self.indivimputes.keys()):
@@ -1254,7 +1231,7 @@ class Imputation(object):
         indivoutfile.close()
 
         if outtype == "vcf" and len(indata.reflist) > 0:
-            outseqfile = filebase + "-out.vcf"
+            outseqfile = indata.filebase + "-out.vcf"
             outfile = open(outseqfile, 'w')
             outfile.write("##fileformat=VCFv4.1\n")
             outfile.write("##source=IMPUTORv1.0\n")
@@ -1282,7 +1259,7 @@ class Imputation(object):
                     outfile.write("\n")
 
         else:  # default to fasta
-            outseqfile = filebase + "-seqout.fasta"
+            outseqfile = indata.filebase + "-seqout.fasta"
             outfile = open(outseqfile, 'w')
             outseq = {}
             for seq in self.imputedseq:
@@ -1415,6 +1392,9 @@ if __name__ == "__main__":
     maxjump = int(args.maxjump)
     orphanchk = bool(args.orphanchk)
 
+    if seqonly:
+        verbose = True
+
     rng = random.SystemRandom()  # Uses /dev/urandom
 
     sys.setrecursionlimit(2 ** 20)
@@ -1427,13 +1407,17 @@ if __name__ == "__main__":
                 batchlist.append(inputfile + "/" + bfile)
             elif bfile.endswith(".vcf"):
                 batchlist.append(inputfile + "/" + bfile)
+            elif bfile.endswith(".vcf.gz"):
+                batchlist.append(inputfile + "/" + bfile)
     elif os.path.isfile(inputfile):
         if inputfile.endswith(".fasta"):
             batchlist.append(inputfile)
         elif inputfile.endswith(".vcf"):
             batchlist.append(inputfile)
+        elif inputfile.endswith(".vcf.gz"):
+            batchlist.append(inputfile)
         else:
-            print "Input file must be either .fasta or .vcf"
+            print "Input file must be either .fasta or .vcf or .vcf.gz"
             exit()
     else:
         print "Input file(s) not found. Exiting."
@@ -1468,6 +1452,7 @@ if __name__ == "__main__":
         impute = Imputation(indata, phytree, mutrate, tstv)
         impute.impute()
         impute.output_imputed(impout)
+    exit()
 
 else:
     print("IMPUTOR is being imported into another module. Not yet implemented.")
