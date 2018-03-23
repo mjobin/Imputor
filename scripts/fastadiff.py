@@ -1,8 +1,9 @@
-# Fastadiff
+#!/usr/bin/python
 
 """ Fastadiff
 
-    Author - Matthew Jobin
+    Author - Matthew Jobin, Department of Anthropology,
+        University of California, Santa Cruz.
     """
 
 import argparse
@@ -20,12 +21,16 @@ parser.add_argument('-impoutfile',metavar='<impoutfile>',help='impout file')
 parser.add_argument('-silent', dest='silent', help='None of your beeswax.',
 					action='store_true')
 parser.set_defaults(silent=False)
+parser.add_argument('-seqout', dest='seqout', help='Only collect seqout, otherwise ignore.',
+					action='store_true')
+parser.set_defaults(seqout=False)
 
 args = parser.parse_args()
 afile = args.afile
 bfile = args.bfile
 impoutfile = args.impoutfile
 silent = bool(args.silent)
+seqout = bool(args.seqout)
 
 if not silent:
 	print "\n\n***FASTADIFF ***\n\n"
@@ -74,8 +79,13 @@ if not bfile:
 	batchlist.append(afile)
 elif os.path.isdir(bfile):
 	for bbfile in os.listdir(bfile):
-		if bbfile.endswith(".fasta"):
-			batchlist.append(bfile + "/" + bbfile)
+		if seqout:
+			if bbfile.endswith("-seqout.fasta"):
+				batchlist.append(bfile + "/" + bbfile)
+		else: 
+			if bbfile.endswith(".fasta"):
+				if not bbfile.endswith("-seqout.fasta"):
+					batchlist.append(bfile + "/" + bbfile)
 elif os.path.isfile(bfile):
 	if bfile.endswith(".fasta"):
 		batchlist.append(bfile)
@@ -86,11 +96,12 @@ else:
 	print "Input file must be either .fasta or .vcf"
 	exit()
 
+
 pairwises = []
+pwcount = []
 
 for bfile in batchlist:
 
-# 	mmimpouts = []
 	bbasename = os.path.basename(bfile)
 	bfilebase, bfileext = os.path.splitext(bbasename)
 	
@@ -142,9 +153,8 @@ for bfile in batchlist:
 				print k + "\t" + l + "\t" + str((float(len(diffs)) / float(len(xaseq))))
 				diffsites[k] = diffs
 
-			
+	print "\n********* " , bfile		
 	if not silent:
-		print "\n********* " , bfile		
 		print "ID\tDiffs"
 	for x in sorted(diffsites.keys()):
 		for tdiff in diffsites[x]:
@@ -155,24 +165,30 @@ for bfile in batchlist:
 			if not silent:
 				print x, "\t", diffsites[x]
 	if not silent:
-		print "Differences: ", totdiffs, " out of " , totbases
+		print "Pairwise Differences: ", totdiffs, " out of " , totbases
 	pairwise = float(totdiffs) / float(totbases)
 	if not silent:
 		print "Pairwise Distance: " , pairwise
 	outfile.write(str(pairwise))
 	pairwises.append(pairwise)
+	pwcount.append(totdiffs)
 	outfile.write("\n")
-# 	impoutoutname = afilebase + "-" +  bfilebase + "-mmimpout.txt"
-# 	impoutoutfile = open(impoutoutname, 'w')
-# 	impoutoutfile.write("SUBJECTID\t VAR\t FROM\t TO\t TYPE\tPASS\tIMPUTED\n")
-# 	for imputed in mmimpouts:
-# 		impoutoutfile.write(imputed)
-# 		impoutoutfile.write("\n")
-# 	impoutoutfile.close()
 
-if not silent:
-	print "Average Pairwise Distance for all infiles: "
-print sum(pairwises) / float(len(pairwises))
+
+if len(batchlist) > 0:
+	totmean = float(sum(pwcount))/float(len(batchlist))
+	print "Mean Pairwise Distance for all infiles: " + str(totmean)
+	sumsq = 0.0
+	for pw in pwcount:
+		sumsq = sumsq + ((totmean - float(pw))**2.0)
+	insd  = sumsq/(len(batchlist)-1)
+	sd = insd**(1.0/2.0)
+	print "S.D. Pairwise Distance for all infiles: " + str(sd)
+	
+	
+print "Ratio Pairwise Distance for all infiles: " +str(sum(pairwises) / float(len(pairwises)))
+
+exit()
 
 
 

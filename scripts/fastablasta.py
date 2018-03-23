@@ -1,9 +1,10 @@
-#Fastablasta
+#!/usr/bin/python
 
 """ Fastablasta
 
-	Author - Matthew Jobin
-	"""
+    Author - Matthew Jobin, Department of Anthropology,
+        University of California, Santa Cruz.
+    """
 
 
 import argparse
@@ -51,8 +52,10 @@ def mutit(x, tstv):
 
 print "\n\n***FASTABLASTA ***\n\n"
 
-parser = argparse.ArgumentParser(description="This script does: \n\n\t" \
-											 "- .\n\t" \
+parser = argparse.ArgumentParser(description="This script: \n\n\t" \
+											 "- takes a fasta infile.\n\t" \
+											 "- creates randoml;y-altered copies.\n\t" \
+											 "with missing or altered bases .\n\t" \
 											 "- ",formatter_class=RawTextHelpFormatter)
 
 # parser.add_argument('-outfile',metavar='<file>',help='output file: .fasta', required=True)
@@ -215,6 +218,7 @@ for infile in batchlist:
 			outfile.write(x[1])
 			outfile.write("\n")
 		outfile.close()
+exit()
 
 
 

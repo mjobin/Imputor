@@ -33,8 +33,9 @@ class InData(object):
         and imputation.
     """
 
-    def __init__(self, minfile):
+    def __init__(self, minfile, mreffile):
         self.inputfile = minfile
+        self.reffile = mreffile
         self.fullsequence = MultipleSeqAlignment([])  # Raw sequence input including non-segregating sites
         self.fullvariantset = set()
         self.fullvariants = {}
@@ -42,6 +43,7 @@ class InData(object):
         self.variantset = set()
         self.reflist = []
         self.variants = {}  # Dictionary of each sample and its variation from the reference sequence
+        self.idxvariants = []
         self.filebase = None
         self.orig_vcf_pos = []  # Original listed positions of variants
         self.geninfo = {}  # Dict of list of dicts
@@ -78,6 +80,9 @@ class InData(object):
 
         if self.inputfile[-5:] == 'fasta':
             self.sequence = AlignIO.read(self.inputfile, 'fasta')
+            if self.reffile:
+                self.seqref = AlignIO.read(self.reffile, 'fasta')
+                self.reflist = self.seqref[0].seq
             self.variants_from_sequence()
             self.prune_non_seg()
         elif self.inputfile[-3:] == 'vcf':
@@ -99,35 +104,85 @@ class InData(object):
             print "Input file must be either .fasta, .vcf, or .vcf.gz"
             exit()
 
-        if verbose:
-            outseqfile = self.filebase
-            if not seqonly:
-                outseqfile = outseqfile + "-indata"
-            outseqfile = outseqfile + ".fasta"
-            outfile = open(outseqfile, 'w')
-            outseq = {}
+        self.sequence.sort()
+
+        if len(self.reflist) > 0:  # if there is a reference sequence, find variants
+            for ref in self.reflist:
+                self.idxvariants.append(list(ref))
+
             for seq in self.sequence:
-                outseq[seq.id] = str(seq.seq)
-            for x in sorted(outseq.keys()):
-                outfile.write(">")
-                outfile.write(str(x))
-                outfile.write("\n")
-                outfile.write(outseq[x])
-                outfile.write("\n")
-            outfile.close()
-            if self.inputfile[-3:] == 'vcf':
-                outreffilename = self.filebase + "-indata-ref.fasta"
-                outreffile = open(outreffilename, 'w')
-                outreffile.write(">REF")
-                outreffile.write("\n")
-                outreffile.write("".join(self.reflist))
-                outreffile.write("\n")
-                outreffile.close()
+                for i in xrange(len(seq.seq)):
+                    if seq.seq[i] not in self.idxvariants[i]:
+                        self.idxvariants[i].append(seq.seq[i])
+
+        if verbose:
+            if outtype == "vcf" and len(self.reflist) > 0:
+                self.output_as_vcf()
+            else:
+                outseqfile = self.filebase
+                if not seqonly:
+                    outseqfile = outseqfile + "-indata"
+                outseqfile = outseqfile + ".fasta"
+                outfile = open(outseqfile, 'w')
+                outseq = {}
+                for seq in self.fullsequence:
+                    outseq[seq.id] = str(seq.seq)
+                for x in sorted(outseq.keys()):
+                    outfile.write(">")
+                    outfile.write(str(x))
+                    outfile.write("\n")
+                    outfile.write(outseq[x])
+                    outfile.write("\n")
+                outfile.close()
+                if self.inputfile[-3:] == 'vcf':
+                    outreffilename = self.filebase + "-indata-ref.fasta"
+                    outreffile = open(outreffilename, 'w')
+                    outreffile.write(">REF")
+                    outreffile.write("\n")
+                    outreffile.write("".join(self.reflist))
+                    outreffile.write("\n")
+                    outreffile.close()
         if rej:
             self.rej_infile(self.inputfile)
 
         print "Finished input."
         return
+
+    def output_as_vcf(self):
+        print "what"
+        outseqfile = self.filebase
+        if not seqonly:
+            outseqfile = outseqfile + "-indata"
+        outseqfile = outseqfile + ".vcf"
+        outfile = open(outseqfile, 'w')
+        outfile.write("##fileformat=VCFv4.1\n")
+        outfile.write("##source=IMPUTORv1.0\n")
+        outfile.write("#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	")
+        for seq in self.sequence:
+            outfile.write(str(seq.name))
+            outfile.write("\t")
+        outfile.write("\n")
+        for i in xrange(0, len(self.idxvariants)):
+            if len(self.idxvariants[i]) > 1:
+                outfile.write("0")
+                outfile.write("\t")
+                outfile.write(str(i))
+                outfile.write("\t.\t")
+                outfile.write(self.idxvariants[i][0])
+                outfile.write("\t")
+                for j in xrange(1, len(self.idxvariants[i])):
+                    if j > 1:
+                        outfile.write(",")
+                    outfile.write(self.idxvariants[i][j])
+                outfile.write("\t.\t.\t.\tGT\t")
+                for seq in self.sequence:
+                    outfile.write(str(self.idxvariants[i].index(seq.seq[i])))
+                    outfile.write("\t")
+                outfile.write("\n")
+
+
+        outfile.close()
+
 
     def vcf_snp_prune(self, in_data=None):
         """ Returns data including only lines containing SNPs.
@@ -149,7 +204,7 @@ class InData(object):
             cols[self.vcf_alt] = cols[self.vcf_alt].upper()
             if len(cols[self.vcf_ref]) > 1:  # if not a snp
                 continue
-            elif(cols[self.vcf_ref] not in self.acgt): # if not a snp
+            elif(cols[self.vcf_ref] not in self.acgt) and (cols[self.vcf_ref] not in self.missing): # if not a snp
                 continue
             else:
                 alt_alleles = cols[self.vcf_alt].split(",")  # List of ALT alleles for this row
@@ -304,6 +359,9 @@ class InData(object):
                         genotype_sequence[changed_genotype_name] = []
 
                 alt_alleles = cols[self.vcf_alt].split(",")  # List of ALT alleles for this row
+                for aa in range(len(alt_alleles)): #Convert other missing symbols to "N"
+                    if alt_alleles[aa] == "." or alt_alleles[aa] == "-":
+                        alt_alleles[aa] = "N"
 
                 for allele_pos, assigned_allele in enumerate(assigned_alleles):  # Iterates through the alleles
                     if assigned_allele == "0":  # Assigned_allele will be 0 for REF and >0 for any ALT
@@ -1039,6 +1097,9 @@ class Imputation(object):
                     for i in xrange(len(seq.seq)):
                         if seq.seq[i] not in self.newvariants[i]:
                             self.newvariants[i].append(seq.seq[i])
+
+
+
         self.imputedseq.sort()
 
     def transversionchk(self, a, b):
@@ -1297,14 +1358,15 @@ if __name__ == "__main__":
                                                  "- ", formatter_class=RawTextHelpFormatter)
 
     parser.add_argument('-file', metavar='<file>', help='input file: FASTA or VCF', required=True)
-    parser.add_argument('-tree', metavar='<tree>', help='tree type; <treefilename.xml>, pars, RAxML, PhyML',
+    parser.add_argument('-reffile', metavar='<reffile>', help='reference sequence for FASTA  input file: FASTA')
+    parser.add_argument('-tree', metavar='<tree>', help='tree type; <treefilename.xml>, <treefilename.nwk>, pars, RAxML, PhyML',
                         default='RAxML')
     parser.add_argument('-outtree', metavar='<outtree>', help='Output format for tree', default='newick')
     parser.add_argument('-alpha', metavar='<alpha>', help='Value of gamma shape parameter.', default='e')
     parser.add_argument('-rmodel', metavar='<rmodel>', help='Model type for RaXML.', default='GTRCAT')
     parser.add_argument('-maxheight', metavar='<maxheight>',
                         help='Height of search toward root for collecting neighbors.',
-                        default=2)
+                        default=3)
     parser.add_argument('-maxdepth', metavar='<maxdepth>',
                         help='Depth of search down descendent nodes for collecting neighbors.', default=3)
     parser.add_argument('-nsize', metavar='<nsize>',
@@ -1358,6 +1420,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     inputfile = args.file
+    reffile = args.reffile
     treetype = args.tree
     outtreetype = args.outtree
     alpha = args.alpha
@@ -1428,7 +1491,7 @@ if __name__ == "__main__":
         print "\n\n****************\nInput file:", infile, "\n****************"
         print "Unique stamp for temp files: ", randstamp
 
-        indata = InData(infile)
+        indata = InData(infile, reffile)
 
         if seqonly:
             continue
