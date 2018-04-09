@@ -682,15 +682,11 @@ class PhyloTree(object):
 
             allkids = self.collect_kids(curparent, [], 0, self.maxdepth)
 
-            addedkids = 0
             for kid in allkids:
                 if kid is not term:
-                    addedkids += 1
                     neighbors.add(kid)
                     if len(neighbors) >= tsize:
                         break
-            if orphanchk and addedkids == 0:
-                break
             curnode = curparent
             height += 1
         return neighbors
@@ -1396,9 +1392,6 @@ if __name__ == "__main__":
     parser.add_argument('-maxjump', metavar='<maxjump>',
                         help='Maximum increase in branch distance (over previous branch traversed) allowed before terminating neighbor search if -ncollect set to distance or hops.',
                         default=5)
-    parser.add_argument('-orphanchk', dest='orphanchk', help='Stop neighbor search if current has no neighbors.',
-                        action='store_true')
-    parser.set_defaults(orphanchk=False)
 
     args = parser.parse_args()
     inputfile = args.file
@@ -1435,7 +1428,6 @@ if __name__ == "__main__":
     ncollect = args.ncollect
     maxn = int(args.maxn)
     maxjump = int(args.maxjump)
-    orphanchk = bool(args.orphanchk)
 
     if seqonly:
         verbose = True
