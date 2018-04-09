@@ -110,7 +110,7 @@ class InData(object):
             for ref in self.reflist:
                 self.idxvariants.append(list(ref))
 
-            for seq in self.sequence:
+            for seq in self.fullsequence:
                 for i in xrange(len(seq.seq)):
                     if seq.seq[i] not in self.idxvariants[i]:
                         self.idxvariants[i].append(seq.seq[i])
@@ -149,7 +149,6 @@ class InData(object):
         return
 
     def output_as_vcf(self):
-        print "what"
         outseqfile = self.filebase
         if not seqonly:
             outseqfile = outseqfile + "-indata"
@@ -158,29 +157,26 @@ class InData(object):
         outfile.write("##fileformat=VCFv4.1\n")
         outfile.write("##source=IMPUTORv1.0\n")
         outfile.write("#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	")
-        for seq in self.sequence:
+        for seq in self.fullsequence:
             outfile.write(str(seq.name))
             outfile.write("\t")
         outfile.write("\n")
         for i in xrange(0, len(self.idxvariants)):
-            if len(self.idxvariants[i]) > 1:
-                outfile.write("0")
+            outfile.write("0")
+            outfile.write("\t")
+            outfile.write(str(i))
+            outfile.write("\t.\t")
+            outfile.write(self.idxvariants[i][0])
+            outfile.write("\t")
+            for j in xrange(1, len(self.idxvariants[i])):
+                if j > 1:
+                    outfile.write(",")
+                outfile.write(self.idxvariants[i][j])
+            outfile.write("\t.\t.\t.\tGT\t")
+            for seq in self.fullsequence:
+                outfile.write(str(self.idxvariants[i].index(seq.seq[i])))
                 outfile.write("\t")
-                outfile.write(str(i))
-                outfile.write("\t.\t")
-                outfile.write(self.idxvariants[i][0])
-                outfile.write("\t")
-                for j in xrange(1, len(self.idxvariants[i])):
-                    if j > 1:
-                        outfile.write(",")
-                    outfile.write(self.idxvariants[i][j])
-                outfile.write("\t.\t.\t.\tGT\t")
-                for seq in self.sequence:
-                    outfile.write(str(self.idxvariants[i].index(seq.seq[i])))
-                    outfile.write("\t")
-                outfile.write("\n")
-
-
+            outfile.write("\n")
         outfile.close()
 
 
@@ -1417,6 +1413,7 @@ if __name__ == "__main__":
     parser.add_argument('-orphanchk', dest='orphanchk', help='Stop neighbor search if current has no neighbors.',
                         action='store_true')
     parser.set_defaults(orphanchk=False)
+
 
     args = parser.parse_args()
     inputfile = args.file
