@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-""" Imputor - software for imputing missing and non-missing mutations in sequence data by the use
+""" Imputor - software for imputing missing data and correcting sequencing errors in sequence data by the use
     of phylogenetic trees.
     
     Author - Matthew Jobin, Department of Anthropology, Santa Clara University and Department of Anthropology,
@@ -143,7 +143,7 @@ class InData(object):
                     outreffile.write("\n")
                     outreffile.close()
         if rej:
-            self.rej_infile(self.inputfile)
+            self.rej_infile()
 
         print "Finished input."
         return
@@ -179,7 +179,6 @@ class InData(object):
             outfile.write("\n")
         outfile.close()
 
-
     def vcf_snp_prune(self, in_data=None):
         """ Returns data including only lines containing SNPs.
 
@@ -200,7 +199,7 @@ class InData(object):
             cols[self.vcf_alt] = cols[self.vcf_alt].upper()
             if len(cols[self.vcf_ref]) > 1:  # if not a snp
                 continue
-            elif(cols[self.vcf_ref] not in self.acgt) and (cols[self.vcf_ref] not in self.missing): # if not a snp
+            elif (cols[self.vcf_ref] not in self.acgt) and (cols[self.vcf_ref] not in self.missing):  # if not a snp
                 continue
             else:
                 alt_alleles = cols[self.vcf_alt].split(",")  # List of ALT alleles for this row
@@ -355,7 +354,7 @@ class InData(object):
                         genotype_sequence[changed_genotype_name] = []
 
                 alt_alleles = cols[self.vcf_alt].split(",")  # List of ALT alleles for this row
-                for aa in range(len(alt_alleles)): #Convert other missing symbols to "N"
+                for aa in range(len(alt_alleles)):  # Convert other missing symbols to "N"
                     if alt_alleles[aa] == "." or alt_alleles[aa] == "-":
                         alt_alleles[aa] = "N"
 
@@ -365,7 +364,8 @@ class InData(object):
                     elif assigned_allele == ".":  # VCF format code for missing allele
                         genotype_sequence[changed_genotype_names[allele_pos]].append("N")
                     else:
-                        genotype_sequence[changed_genotype_names[allele_pos]].append(alt_alleles[int(assigned_allele) - 1])
+                        genotype_sequence[changed_genotype_names[allele_pos]].append(
+                            alt_alleles[int(assigned_allele) - 1])
                         self.variantset.add(var_count)
                         if changed_genotype_names[allele_pos] in self.variants:  # Keys added to self.variants here
                             self.variants[changed_genotype_names[allele_pos]].append(var_count)
@@ -408,10 +408,9 @@ class InData(object):
         self.fullvariantset = self.variantset
         self.fullvariants = self.variants
 
-    def rej_infile(self, linfile=None):
+    def rej_infile(self):
         """ Output a REJECTOR2 input file
 
-        :param linfile:
         :return:
         """
 
@@ -660,7 +659,7 @@ class PhyloTree(object):
             neighbors.add(sorted_neb[i][0])
         return neighbors
 
-    def neighbors_by_rootward(self, term, parents, height, tsize, ctree):
+    def neighbors_by_rootward(self, term, parents, height, tsize):
         """
 
         :param ctree:
@@ -674,7 +673,6 @@ class PhyloTree(object):
         curnode = term
         # Collect closest neighbors on tree
 
-        # print "TARGET: ", str(term)
         while len(neighbors) < tsize:
             if curnode not in parents:  # will not go past the root
                 break
@@ -682,19 +680,11 @@ class PhyloTree(object):
                 break
             curparent = parents[curnode]
 
-            # print "\tPARENT: ", str(curparent)
             allkids = self.collect_kids(curparent, [], 0, self.maxdepth)
-
-            # ndist = {}
-            # for neb in allkids:
-            #     if len(ctree.trace(term, neb)) <= maxhops:
-            #         ndist[neb] = ctree.distance(term, neb)
-            # sorted_neb = sorted(ndist.items(), key=operator.itemgetter(1))
 
             addedkids = 0
             for kid in allkids:
                 if kid is not term:
-                    # print "\t\tADD KID: ", str(kid[0])
                     addedkids += 1
                     neighbors.add(kid)
                     if len(neighbors) >= tsize:
@@ -994,10 +984,8 @@ class Imputation(object):
                         mneighbors = phytree.neighbors_by_mono(term, self.phytree.tree, self.phytree.treeparents,
                                                                msize)
                     else:
-                        nneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, nsize,
-                                                                   self.phytree.tree)
-                        mneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, msize,
-                                                                   self.phytree.tree)
+                        nneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, nsize)
+                        mneighbors = phytree.neighbors_by_rootward(term, self.phytree.treeparents, 0, msize)
 
                     self.impute_threshold(term, self.phytree.treeparents, str(i + 1),
                                           mneighbors, nneighbors)
@@ -1094,8 +1082,6 @@ class Imputation(object):
                         if seq.seq[i] not in self.newvariants[i]:
                             self.newvariants[i].append(seq.seq[i])
 
-
-
         self.imputedseq.sort()
 
     def transversionchk(self, a, b):
@@ -1121,14 +1107,13 @@ class Imputation(object):
             return 1 / self.tstv
         return -1
 
-    def backmutchk(self, term, parents, allneighbours, curvar, origseq, neighborseq):
+    def backmutchk(self, term, parents, allneighbours, curvar, origseq):
         """ Check whether there is a reversion somewhere in the tree outside chosen neighbors of target
         :param term: terminal node
         :param parents: list of parents of all nodes in tree
         :param allneighbours: set of closest neighbors chosen by user-selected method
         :param curvar: current variant
         :param origseq: Original state of site.
-        :param neighborseq: State of neighbors' sites.
         :return:
         """
         backmut = False
@@ -1233,7 +1218,7 @@ class Imputation(object):
                 if nobackmutchk:
                     return [termname, curvar, orig, only, "Imputed Non-missing", thispass, "T"]
                 else:
-                    if self.backmutchk(term, parents, bmneighbors, curvar, orig, only):
+                    if self.backmutchk(term, parents, bmneighbors, curvar, orig):
                         return [termname, curvar, orig, only, "Imputed Non-missing", thispass, "T"]
                     else:
                         return [termname, curvar, orig, only, "No Reversion", thispass, "F"]
@@ -1355,7 +1340,8 @@ if __name__ == "__main__":
 
     parser.add_argument('-file', metavar='<file>', help='input file: FASTA or VCF', required=True)
     parser.add_argument('-reffile', metavar='<reffile>', help='reference sequence for FASTA  input file: FASTA')
-    parser.add_argument('-tree', metavar='<tree>', help='tree type; <treefilename.xml>, <treefilename.nwk>, pars, RAxML, PhyML',
+    parser.add_argument('-tree', metavar='<tree>',
+                        help='tree type; <treefilename.xml>, <treefilename.nwk>, pars, RAxML, PhyML',
                         default='RAxML')
     parser.add_argument('-outtree', metavar='<outtree>', help='Output format for tree', default='newick')
     parser.add_argument('-alpha', metavar='<alpha>', help='Value of gamma shape parameter.', default='e')
@@ -1413,7 +1399,6 @@ if __name__ == "__main__":
     parser.add_argument('-orphanchk', dest='orphanchk', help='Stop neighbor search if current has no neighbors.',
                         action='store_true')
     parser.set_defaults(orphanchk=False)
-
 
     args = parser.parse_args()
     inputfile = args.file
@@ -1516,4 +1501,3 @@ if __name__ == "__main__":
 
 else:
     print("IMPUTOR is being imported into another module. Not yet implemented.")
-
