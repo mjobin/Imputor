@@ -63,7 +63,7 @@ class InData(object):
         self.vcf_filter = 6
         self.vcf_info = 7
         self.acgt = ['A', 'C', 'G', 'T']
-        self.missing = ['-', 'N', '?']
+        self.missing = ['-', 'N', '?', '.']
 
         self.load_input_data()
 
@@ -149,6 +149,7 @@ class InData(object):
         return
 
     def output_as_vcf(self):
+        print "Output as VCF..."
         outseqfile = self.filebase
         if not seqonly:
             outseqfile = outseqfile + "-indata"
@@ -187,7 +188,7 @@ class InData(object):
         """
         snps_data = []
         print "\nPruning non-SNP entries..."
-        bar = progressbar.ProgressBar(redirect_stdout=True)
+        bar = progressbar.ProgressBar()
         for i in bar(range(len(in_data))):
             file_line = in_data[i]
             cols = file_line.split('\t')
@@ -227,7 +228,7 @@ class InData(object):
         diffsets = []
         for i in range(len(firstseq)):
             diffsets.append(set())
-        bar = progressbar.ProgressBar(redirect_stdout=True)
+        bar = progressbar.ProgressBar()
         for i in bar(range(len(self.sequence))):
             seq_line = self.sequence[i]
             if len(seq_line) != len(firstseq):
@@ -239,7 +240,7 @@ class InData(object):
                 diffsets[j].add(seq_line[j])
 
         print "\nGenerating variants from sequence..."
-        bar = progressbar.ProgressBar(redirect_stdout=True)
+        bar = progressbar.ProgressBar()
         for i in bar(range(len(self.sequence))):
             seq_line = self.sequence[i]
             if len(seq_line) != len(firstseq):
@@ -321,11 +322,12 @@ class InData(object):
         snps_data = self.vcf_snp_prune(raw_data)  # Ensure only SNPs are being processed
         var_count = 0
         print "\nGenerating sequence..."
-        bar = progressbar.ProgressBar(redirect_stdout=True)
+        bar = progressbar.ProgressBar()
         for i in bar(range(len(snps_data))):
             file_line = snps_data[i]
 
             cols = file_line.split('\t')
+
 
             if int(cols[self.vcf_pos]) > self.maxseqlength:
                 self.maxseqlength = int(cols[self.vcf_pos])
@@ -357,6 +359,7 @@ class InData(object):
                 for aa in range(len(alt_alleles)):  # Convert other missing symbols to "N"
                     if alt_alleles[aa] == "." or alt_alleles[aa] == "-":
                         alt_alleles[aa] = "N"
+
 
                 for allele_pos, assigned_allele in enumerate(assigned_alleles):  # Iterates through the alleles
                     if assigned_allele == "0":  # Assigned_allele will be 0 for REF and >0 for any ALT
@@ -692,7 +695,7 @@ class PhyloTree(object):
         return neighbors
 
     def parsimony_tree(self):
-        """ Constructs a tree via maximum parsimony using Biopython's ParsimonyTreeConstructor.
+        """ Constructs a tree via maximum parsimony using RaxML
 
         """
         print "Generating maximum parsimony tree.."
@@ -887,7 +890,7 @@ class Imputation(object):
         self.imputelist = []
         self.multi = multi
         self.acgt = {'A', 'C', 'G', 'T'}
-        self.missing = {'.', '-', 'N'}
+        self.missing = ['-', 'N', '?', '.']
         self.indivimputes = {}
         self.neighbors = {}
         self.missinglist = {}
@@ -916,7 +919,7 @@ class Imputation(object):
             for i in range(passes):
                 print "\nPass", i
                 bpar = iter(phytree.btreeparents)
-                bar = progressbar.ProgressBar(redirect_stdout=True)
+                bar = progressbar.ProgressBar()
                 for j in bar(range(len(self.phytree.btrees))):
                     # for btree in self.phytree.btrees:
                     btree = self.phytree.btrees[j]
@@ -964,7 +967,7 @@ class Imputation(object):
             for i in range(passes):
                 print "\nPass", i
                 random.shuffle(terms)
-                bar = progressbar.ProgressBar(redirect_stdout=True)
+                bar = progressbar.ProgressBar()
                 for p in bar(range(len(terms))):
                     term = terms[p]
                     # for term in terms:
@@ -1056,7 +1059,7 @@ class Imputation(object):
             locs.append(curvar)
         locs.sort()
 
-        bar = progressbar.ProgressBar(redirect_stdout=True)
+        bar = progressbar.ProgressBar()
         for p in bar(range(len(indata.fullsequence))):
             fullseq = indata.fullsequence[p]
             tmpseq = list(fullseq)
@@ -1267,6 +1270,7 @@ class Imputation(object):
                 indivoutfile.write(",")
             indivoutfile.write("\n")
         indivoutfile.close()
+
 
         if outtype == "vcf" and len(indata.reflist) > 0:
             outseqfile = indata.filebase + "-out.vcf"
