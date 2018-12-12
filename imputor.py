@@ -36,9 +36,6 @@ class InData(object):
     def __init__(self, minfile, mreffile):
         self.inputfile = minfile
         self.reffile = mreffile
-        self.fullsequence = MultipleSeqAlignment([])  # Raw sequence input including non-segregating sites
-        self.fullvariantset = set()
-        self.fullvariants = {}
         self.sequence = MultipleSeqAlignment([])
         self.variantset = set()
         self.reflist = []
@@ -84,7 +81,7 @@ class InData(object):
                 self.seqref = AlignIO.read(self.reffile, 'fasta')
                 self.reflist = self.seqref[0].seq
             self.variants_from_sequence()
-            self.prune_non_seg()
+            # self.prune_non_seg()
         elif self.inputfile[-3:] == 'vcf':
             file_data = open(self.inputfile, 'r')
             raw_data = []
@@ -110,7 +107,7 @@ class InData(object):
             for ref in self.reflist:
                 self.idxvariants.append(list(ref))
 
-            for seq in self.fullsequence:
+            for seq in self.sequence:
                 for i in xrange(len(seq.seq)):
                     if seq.seq[i] not in self.idxvariants[i]:
                         self.idxvariants[i].append(seq.seq[i])
@@ -125,7 +122,7 @@ class InData(object):
                 outseqfile = outseqfile + ".fasta"
                 outfile = open(outseqfile, 'w')
                 outseq = {}
-                for seq in self.fullsequence:
+                for seq in self.sequence:
                     outseq[seq.id] = str(seq.seq)
                 for x in sorted(outseq.keys()):
                     outfile.write(">")
@@ -158,7 +155,7 @@ class InData(object):
         outfile.write("##fileformat=VCFv4.1\n")
         outfile.write("##source=IMPUTORv1.0\n")
         outfile.write("#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	")
-        for seq in self.fullsequence:
+        for seq in self.sequence:
             outfile.write(str(seq.name))
             outfile.write("\t")
         outfile.write("\n")
@@ -174,7 +171,7 @@ class InData(object):
                     outfile.write(",")
                 outfile.write(self.idxvariants[i][j])
             outfile.write("\t.\t.\t.\tGT\t")
-            for seq in self.fullsequence:
+            for seq in self.sequence:
                 outfile.write(str(self.idxvariants[i].index(seq.seq[i])))
                 outfile.write("\t")
             outfile.write("\n")
@@ -256,44 +253,44 @@ class InData(object):
             self.variants[seq_line.name] = curdiffs
         return
 
-    def prune_non_seg(self):
-        """ Strips out non-segregating sites from a sequence alignment.
-            Uses self.variantset, which must be filled first.
-
-        :return:
-        """
-        self.fullsequence = self.sequence  # First back up the original sequence
-        self.fullvariantset = self.variantset
-        self.fullvariants = self.variants
-        self.sequence = MultipleSeqAlignment([])  # Blank the sequence to be worked on
-
-        print "\nPruning non-segregating sites..."
-        locs = []
-        for curvar in self.variantset:
-            locs.append(curvar)
-        locs.sort()
-
-        stripped = {}
-        seqnames = []
-        for seq in self.fullsequence:
-            stripped[seq.name] = []
-            seqnames.append(seq.name)
-
-        for i in xrange(len(locs)):
-            loc = locs[i]
-            self.pruned_to_full.append(loc)
-            seqbits = self.fullsequence[:, loc]
-            name = 0
-            for seqbit in seqbits:
-                stripped[seqnames[name]].append(seqbit)
-                name += 1
-
-        for strip in stripped.keys():
-            self.sequence.append(SeqRecord(Seq(''.join(stripped[strip])), name=strip, id=strip))
-
-        self.variantset = set()
-        self.variants = {}
-        self.variants_from_sequence()  # Re-run on stripped sequence
+    # def prune_non_seg(self):
+    #     """ Strips out non-segregating sites from a sequence alignment.
+    #         Uses self.variantset, which must be filled first.
+    #
+    #     :return:
+    #     """
+    #     self.fullsequence = self.sequence  # First back up the original sequence
+    #     self.fullvariantset = self.variantset
+    #     self.fullvariants = self.variants
+    #     self.sequence = MultipleSeqAlignment([])  # Blank the sequence to be worked on
+    #
+    #     print "\nPruning non-segregating sites..."
+    #     locs = []
+    #     for curvar in self.variantset:
+    #         locs.append(curvar)
+    #     locs.sort()
+    #
+    #     stripped = {}
+    #     seqnames = []
+    #     for seq in self.fullsequence:
+    #         stripped[seq.name] = []
+    #         seqnames.append(seq.name)
+    #
+    #     for i in xrange(len(locs)):
+    #         loc = locs[i]
+    #         self.pruned_to_full.append(loc)
+    #         seqbits = self.fullsequence[:, loc]
+    #         name = 0
+    #         for seqbit in seqbits:
+    #             stripped[seqnames[name]].append(seqbit)
+    #             name += 1
+    #
+    #     for strip in stripped.keys():
+    #         self.sequence.append(SeqRecord(Seq(''.join(stripped[strip])), name=strip, id=strip))
+    #
+    #     self.variantset = set()
+    #     self.variants = {}
+    #     self.variants_from_sequence()  # Re-run on stripped sequence
 
     def seq_from_variants(self, raw_data=None):
         """ Create sequence using a list of variants.
@@ -407,9 +404,7 @@ class InData(object):
         for geno in genotype_sequence.keys():
             self.sequence.append(SeqRecord(Seq(''.join(genotype_sequence[geno])), name=geno, id=geno))
 
-        self.fullsequence = self.sequence
-        self.fullvariantset = self.variantset
-        self.fullvariants = self.variants
+
 
     def rej_infile(self):
         """ Output a REJECTOR2 input file
@@ -914,6 +909,8 @@ class Imputation(object):
         else:
             print "ROOTWARD"
 
+
+
         terms = self.phytree.tree.get_terminals()  # Get all internal nodes on tree. These are the ones with samples.
         if boot > 0 or runs > 0:  # Bootstrap replicates or multiple runs
             for i in range(passes):
@@ -991,7 +988,13 @@ class Imputation(object):
                 for newimpute in self.imputelist:
                     if newimpute[6] == "T":
                         self.indivimputes[newimpute[0]].append(newimpute[1])
+
                         self.workseq[newimpute[0]][newimpute[1]] = newimpute[3]
+
+
+
+
+
         self.process_imputed()
 
     def impute_threshold(self, term, parents, thispass, mneighbors, nneighbors):
@@ -1055,21 +1058,19 @@ class Imputation(object):
         """
         print "\nProcessing imputed sequences..."
         locs = []
-        for curvar in indata.fullvariantset:
+        for curvar in indata.variantset:
             locs.append(curvar)
         locs.sort()
 
+
+
         bar = progressbar.ProgressBar()
-        for p in bar(range(len(indata.fullsequence))):
-            fullseq = indata.fullsequence[p]
-            tmpseq = list(fullseq)
-            segseq = self.workseq[fullseq.id]
+        for p in bar(range(len(indata.sequence))):
+            oseq = indata.sequence[p]
 
-            if len(segseq) == len(locs):
-                for site, loc in itertools.izip(segseq, locs):  # Relies on original sequence of non-seg sites
-                    tmpseq[loc] = site
+            seqrec = SeqRecord(Seq("".join(self.workseq[oseq.id])), id=oseq.id, name=oseq.id)
 
-            seqrec = SeqRecord(Seq("".join(tmpseq)), id=fullseq.id, name=fullseq.id)
+
             self.imputedseq.append(seqrec)
 
             if len(indata.reflist) > 0:  # if there is a reference sequence, find variants
@@ -1230,6 +1231,8 @@ class Imputation(object):
         :param limpout: switch to determine whether to print information file about imputations
         :return:
         """
+
+
         for imputed in self.imputelist:
             if indata.orig_vcf_pos:
                 imputed[1] = str(indata.orig_vcf_pos[int(imputed[1])])

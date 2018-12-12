@@ -30,6 +30,7 @@ bfile = args.bfile
 impoutfile = args.impoutfile
 silent = bool(args.silent)
 seqout = bool(args.seqout)
+missing = ['-', 'N', '?', '.']
 
 if not silent:
     print "\n\n***FASTADIFF ***\n\n"
@@ -116,6 +117,16 @@ for bfile in batchlist:
     totbases = 0
     seqdiffs = {}
     diffsites = {}
+    totsites = 0
+    totmiss = 0
+
+    #Missingness
+    for k in bseq:
+        for l in bseq[k]:
+            totsites += 1
+            if l in missing:
+                totmiss += 1
+
 
     if twofile:
         # Comparison
@@ -145,7 +156,8 @@ for bfile in batchlist:
                 totdiffs += len(diffs)
                 totbases += len(xaseq)
                 seqdiffs[k] = (float(len(diffs)) / float(len(xaseq)))
-                print k + "\t" + l + "\t" + str((float(len(diffs)) / float(len(xaseq))))
+                if not silent:
+                    print k + "\t" + l + "\t" + str((float(len(diffs)) / float(len(xaseq))))
                 diffsites[k] = diffs
 
     print "\n********* ", bfile
@@ -164,6 +176,7 @@ for bfile in batchlist:
     pairwise = float(totdiffs) / float(totbases)
     if not silent:
         print "Pairwise Distance: ", pairwise
+    print "Missingness: ", float(totmiss) / float(totsites)
     outfile.write(str(pairwise))
     pairwises.append(pairwise)
     pwcount.append(totdiffs)
