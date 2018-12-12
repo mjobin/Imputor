@@ -122,10 +122,15 @@ for bfile in batchlist:
 
     #Missingness
     for k in bseq:
+        thissites = 0
+        thismiss = 0
         for l in bseq[k]:
+            thissites += 1
             totsites += 1
             if l in missing:
                 totmiss += 1
+                thismiss +=1
+        print "Missingness for " + k + ": " + str(float(thismiss) / float(thissites))
 
 
     if twofile:
@@ -176,7 +181,7 @@ for bfile in batchlist:
     pairwise = float(totdiffs) / float(totbases)
     if not silent:
         print "Pairwise Distance: ", pairwise
-    print "Missingness: ", float(totmiss) / float(totsites)
+    print "Mean Missingness: ", float(totmiss) / float(totsites)
     outfile.write(str(pairwise))
     pairwises.append(pairwise)
     pwcount.append(totdiffs)
