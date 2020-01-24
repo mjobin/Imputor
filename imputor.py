@@ -1268,7 +1268,7 @@ class Imputation(object):
             indivoutfile.write("\n")
         indivoutfile.close()
 
-        if outtype == "vcf" and len(indata.reflist) > 0:
+        if outtype == "vcf":
             outseqfile = indata.filebase + "-out.vcf"
             outfile = open(outseqfile, 'w')
             outfile.write("##fileformat=VCFv4.1\n")
